@@ -6,9 +6,15 @@ from dbbackup.adapters.base import DBAdapter
 
 def _load_registry() -> dict[str, type[DBAdapter]]:
     # Import lazily so submodules can import base without circular issues
+    from dbbackup.adapters.mongo import MongoAdapter
+    from dbbackup.adapters.mysql import MySQLAdapter
+    from dbbackup.adapters.postgres import PostgresAdapter
     from dbbackup.adapters.sqlite import SQLiteAdapter
 
     return {
+        "mysql": MySQLAdapter,
+        "mongo": MongoAdapter,
+        "postgres": PostgresAdapter,
         "sqlite": SQLiteAdapter,
     }
 
