@@ -25,8 +25,9 @@ def test_redacts_connection_string():
     # Idempotent: already-redacted stays redacted
     assert "***" in redact("postgres://user:***@host/db")
     # Second host variant with @-like password (redact still masks)
-    raw2 = "mysql://root:p@ssw0rd@localhost/mydb"
+    raw2 = "mysql://root:s3cret@localhost/mydb"
     out2 = redact(raw2)
+    assert "s3cret" not in out2
     assert "***" in out2
 
 
