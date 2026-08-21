@@ -29,8 +29,10 @@ def test_tomllib_not_tomli_dep():
 
     src = pathlib.Path(mod.__file__).read_text()
     assert "tomllib" in src
-    # runtime must not require tomli for reading
-    assert "tomli" not in src or "tomli-w" in src or "tomli" in open("pyproject.toml").read().lower() is False or True
+    # runtime must not require tomli for reading; tomli-w is optional for writes
+    assert "from tomli " not in src and "import tomli" not in src or "tomli-w" in src
+    deps = pathlib.Path("pyproject.toml").read_text().lower()
+    assert "tomli\n" not in deps or "tomli-w" in deps
 
 
 def test_platformdirs_source_of_truth(tmp_path):
