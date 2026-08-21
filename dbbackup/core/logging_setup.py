@@ -19,26 +19,47 @@ BACKUP_COUNT = 5
 
 
 class RedactFilter(logging.Filter):
-    """Logging filter that redacts secrets from every record."""
+    """Logging filter — redaction is handled at format time to avoid mutating shared LogRecord.
+
+    Kept as a pass-through filter for handler attachment checks; actual
+    sanitization happens in ``JsonFormatter`` / ``RedactingFormatter`` so
+    a record shared across multiple handlers is never mutated in place
+    (I3 — propagate-safe).
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
-        # Redact the message
-        if record.msg:
-            try:
-                record.msg = redact(str(record.msg))
-            except Exception:
-                pass
-        # Redact args if present
-        if record.args:
-            try:
-                if isinstance(record.args, dict):
-                    record.args = {k: redact(str(v)) for k, v in record.args.items()}  # type: ignore[assignment]
-                elif isinstance(record.args, tuple):
-                    record.args = tuple(redact(str(a)) for a in record.args)  # type: ignore[assignment]
-            except Exception:
-                pass
-        # Also redact exc_info text is handled via formatter; args/msg covers most cases
         return True
+
+
+class RedactingFormatter(logging.Formatter):
+    """Plain-text formatter that redacts the final formatted message."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        # Copy record so we don't mutate the shared LogRecord (I3)
+        import copy
+
+        rec = copy.copy(record)
+        # Redact msg/args on the copy only
+        try:
+            if rec.msg:
+                rec.msg = redact(str(rec.msg))
+        except Exception:
+            pass
+        if rec.args:
+            try:
+                if isinstance(rec.args, dict):
+                    rec.args = {k: redact(str(v)) for k, v in rec.args.items()}  # type: ignore[assignment]
+                elif isinstance(rec.args, tuple):
+                    rec.args = tuple(redact(str(a)) for a in rec.args)  # type: ignore[assignment]
+            except Exception:
+                pass
+        s = super().format(rec)
+        # Final safety net — redact any residual secrets in formatted string
+        try:
+            s = redact(s)
+        except Exception:
+            pass
+        return s
 
 
 class JsonFormatter(logging.Formatter):
@@ -50,7 +71,15 @@ class JsonFormatter(logging.Formatter):
             "message": redact(record.getMessage()),
         }
         if record.exc_info and record.exc_info[0] is not None:
-            data["exc_info"] = self.formatException(record.exc_info)
+            try:
+                data["exc_info"] = redact(self.formatException(record.exc_info))
+            except Exception:
+                data["exc_info"] = "***"
+        if record.stack_info:
+            try:
+                data["stack_info"] = redact(self.formatStack(record.stack_info))
+            except Exception:
+                data["stack_info"] = "***"
         return json.dumps(data)
 
 
@@ -104,7 +133,7 @@ def setup_logging(
         if json_format:
             fh.setFormatter(JsonFormatter())
         else:
-            fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+            fh.setFormatter(RedactingFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
         fh.addFilter(redact_filter)
         logger.addHandler(fh)
     except Exception:
@@ -116,13 +145,14 @@ def setup_logging(
         console = Console(stderr=True)
         rh = RichHandler(console=console, show_time=True, show_path=False, markup=False)
         rh.setLevel(level)
-        rh.setFormatter(logging.Formatter("%(message)s"))
+        rh.setFormatter(RedactingFormatter("%(message)s"))
         rh.addFilter(redact_filter)
         logger.addHandler(rh)
     except Exception:
         # Fallback to plain stderr
         sh = logging.StreamHandler(sys.stderr)
         sh.setLevel(level)
+        sh.setFormatter(RedactingFormatter("%(message)s"))
         sh.addFilter(redact_filter)
         logger.addHandler(sh)
 

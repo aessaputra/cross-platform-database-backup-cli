@@ -28,8 +28,14 @@ class TempWorkdir:
         return self._path
 
     def __enter__(self) -> TempWorkdir:
-        # tempfile.mkdtemp respects umask; force 0700 on POSIX
-        self._tmpdir = tempfile.mkdtemp(prefix=self._prefix)
+        if sys.platform != "win32":
+            old_umask = os.umask(0o077)
+            try:
+                self._tmpdir = tempfile.mkdtemp(prefix=self._prefix)
+            finally:
+                os.umask(old_umask)
+        else:
+            self._tmpdir = tempfile.mkdtemp(prefix=self._prefix)
         self._path = Path(self._tmpdir)
         if sys.platform != "win32":
             try:

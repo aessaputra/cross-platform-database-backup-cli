@@ -121,3 +121,18 @@ class BackupResult:
     error_code: int | None = None
     db_type: str | None = None
     database: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.error is not None:
+            try:
+                from dbbackup.core.redact import redact  # local import to avoid cycle
+
+                redacted = redact(self.error)
+                # Bypass dataclass frozen checks if any; direct assignment
+                object.__setattr__(self, "error", redacted)
+            except Exception:
+                # Fail-closed: if redact itself fails, do not leak raw error
+                try:
+                    object.__setattr__(self, "error", "***")
+                except Exception:
+                    pass

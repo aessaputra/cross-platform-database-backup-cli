@@ -16,10 +16,18 @@ def test_redacts_password_case_insensitive():
 
 
 def test_redacts_connection_string():
-    assert "***" in redact("postgres://user:s3cret@host/db")
-    assert "s3cret" not in redact("postgres://user:s3cret@host/db")
-    assert "***" in redact("postgres://user:***@host/db")  # idempotent
-    assert "***" in redact("mysql://root:p@ssw0rd@localhost/mydb")
+    # Real secret — not pre-redacted input. Must redact password and not leak it.
+    raw = "postgres://alice:s3cret@db.example.com:5432/mydb"
+    out = redact(raw)
+    assert "s3cret" not in out
+    assert "***" in out
+    assert "alice" in out  # user preserved, password redacted
+    # Idempotent: already-redacted stays redacted
+    assert "***" in redact("postgres://user:***@host/db")
+    # Second host variant with @-like password (redact still masks)
+    raw2 = "mysql://root:p@ssw0rd@localhost/mydb"
+    out2 = redact(raw2)
+    assert "***" in out2
 
 
 def test_redacts_slack_webhook():
@@ -29,8 +37,8 @@ def test_redacts_slack_webhook():
 
 
 def test_redacts_s3_token():
-    assert "***" in redact("aws_secret_access_key=AKIAIOSFODNN7EXAMPLE")
-    assert "AKIAIOSFODNN7EXAMPLE" not in redact("aws_secret_access_key=AKIAIOSFODNN7EXAMPLE")
+    assert "***" in redact("aws_secret_access_key=«redacted:AKIA…»")
+    assert "«redacted:AKIA…»" not in redact("aws_secret_access_key=«redacted:AKIA…»")
     assert "***" in redact("token=mysecrettoken123")
 
 
@@ -39,10 +47,9 @@ def test_redacts_none_and_empty():
     assert redact(None) == ""  # type: ignore[arg-type]
     assert redact("hello world") == "hello world"
 
-
 def test_redacts_multiple_secrets():
-    text = "password=foo postgres://u:bar@host/db https://hooks.slack.com/xxx"
+    text = "password=foo postgres://u:s3cret@host/db https://hooks.slack.com/xxx"
     out = redact(text)
     assert "foo" not in out
-    assert "bar" not in out
+    assert "s3cret" not in out
     assert "***" in out

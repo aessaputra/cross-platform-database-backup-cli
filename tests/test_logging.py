@@ -4,14 +4,27 @@ from dbbackup.core.logging_setup import RedactFilter, setup_logging
 
 
 def test_redact_filter_redacts_password(caplog=None):  # noqa: ARG001
+    # I3 fix: RedactFilter no longer mutates LogRecord in place; redaction
+    # happens at format time via RedactingFormatter/JsonFormatter (propagate-safe).
     f = RedactFilter()
     record = logging.LogRecord(
         name="test", level=logging.INFO, pathname="", lineno=0,
         msg="password=secret123", args=(), exc_info=None,
     )
     assert f.filter(record)
-    assert "secret123" not in record.getMessage()
-    assert "***" in record.getMessage()
+    # filter must not mutate the shared record
+    assert "secret123" in record.getMessage()
+    from dbbackup.core.logging_setup import JsonFormatter, RedactingFormatter
+
+    fmt = RedactingFormatter("%(message)s")
+    out = fmt.format(record)
+    assert "secret123" not in out
+    assert "***" in out
+    # JSON formatter also redacts message
+    jfmt = JsonFormatter()
+    jout = jfmt.format(record)
+    assert "secret123" not in jout
+    assert "***" in jout
 
 
 def test_setup_logging_creates_handlers(tmp_path, monkeypatch):
