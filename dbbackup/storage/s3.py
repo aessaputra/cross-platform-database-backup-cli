@@ -91,7 +91,15 @@ class S3Backend(StorageBackend):
                 pass
             # Redact secret material from error message, preserve exception type
             redacted_msg = redact(str(exc))
-            raise type(exc)(redacted_msg) from exc
+            try:
+                raise type(exc)(redacted_msg) from exc
+            except TypeError:
+                # BotoCoreError and some botocore exceptions take **kwargs, not positional
+                try:
+                    exc.args = (redacted_msg,)
+                except Exception:
+                    pass
+                raise
         finally:
             # Do not close caller's stream unconditionally; leave open for caller
             # but ensure we reset position for small re-reads if needed.
