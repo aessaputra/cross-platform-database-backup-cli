@@ -29,6 +29,7 @@ class PostgresAdapter(DBAdapter):
         host = getattr(opts, "host", "") or "localhost"
         port = getattr(opts, "port", 0) or 5432
         user = getattr(opts, "user", "") or ""
+        password = getattr(opts, "password", "") or ""
         database = getattr(opts, "database", "") or ""
         cmd = [bin_path, "-h", host, "-p", str(port)]
         if user:
@@ -36,7 +37,12 @@ class PostgresAdapter(DBAdapter):
         if database:
             cmd.extend(["-d", database])
         # Plain SQL dump (custom format would be .dump.gz; plain is .sql.gz per spec)
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        env = None
+        if password:
+            import os
+
+            env = {**os.environ, "PGPASSWORD": password}
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         assert proc.stdout is not None
         return BackupArtifact(
             db_type="postgres",
@@ -51,8 +57,21 @@ class PostgresAdapter(DBAdapter):
         src = artifact.open_stream() if hasattr(artifact, "open_stream") else artifact  # type: ignore[union-attr]
         import shutil as _shutil
 
+        # Password for restore via env (same as backup) to avoid prompt
+        password = getattr(getattr(opts, "connection", opts), "password", "") or ""  # type: ignore[union-attr]
+        if not password:
+            password = getattr(opts, "password", "") or ""  # type: ignore[union-attr]
+        env = None
+        if password:
+            import os
+
+            env = {**os.environ, "PGPASSWORD": password}
         proc = subprocess.Popen(
-            [bin_path], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            [bin_path],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
         )
         assert proc.stdin is not None
         _shutil.copyfileobj(src, proc.stdin)  # type: ignore[arg-type]
