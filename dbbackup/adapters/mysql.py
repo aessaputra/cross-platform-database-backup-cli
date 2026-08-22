@@ -40,12 +40,14 @@ class MySQLAdapter(DBAdapter):
         cmd = [bin_path, "--single-transaction", "--quick", f"-h{host}", f"-P{port}"]
         if user:
             cmd.append(f"-u{user}")
-        if password:
-            # Pass via env would be better; use --password= form but redact in errors
-            cmd.append(f"-p{password}")
         if database:
             cmd.append(database)
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        env = None
+        if password:
+            import os
+
+            env = {**os.environ, "MYSQL_PWD": password}
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         assert proc.stdout is not None
         return BackupArtifact(
             db_type="mysql",
@@ -66,11 +68,24 @@ class MySQLAdapter(DBAdapter):
         # Stream artifact into mysql subprocess stdin (minimal impl for registry completeness)
         src = artifact.open_stream() if hasattr(artifact, "open_stream") else artifact  # type: ignore[union-attr]
         host = getattr(getattr(opts, "connection", opts), "host", "") or "localhost"
+        # Password for restore — same env mechanism as backup to avoid argv exposure
+        password = getattr(getattr(opts, "connection", opts), "password", "") or ""  # type: ignore[union-attr]
+        if not password:
+            password = getattr(opts, "password", "") or ""  # type: ignore[union-attr]
         cmd = [bin_path, f"-h{host}"]
         if target:
             cmd.append(str(target))
+        env = None
+        if password:
+            import os
+
+            env = {**os.environ, "MYSQL_PWD": password}
         proc = subprocess.Popen(
-            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
         )
         assert proc.stdin is not None
         import shutil as _shutil

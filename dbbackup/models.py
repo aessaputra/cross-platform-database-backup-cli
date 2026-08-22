@@ -22,6 +22,7 @@ class ConnectionOpts:
     user: str = ""
     password: str = ""
     database: str = ""
+    extra: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

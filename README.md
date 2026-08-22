@@ -48,11 +48,16 @@ pip install -e .[dev]
 ```bash
 # 1. verify prerequisites + connectivity
 dbbackup test-connection --db postgres --host localhost --user backup --database mydb --ask-password
+# with URL (e.g. Neon)
+dbbackup test-connection --url "postgresql://user:password@host:5432/mydb?sslmode=require"
 
 # 2. full backup to S3 (streams dump → gzip → S3)
 dbbackup backup --db postgres --host localhost --user backup --database mydb \
   --ask-password \
   --s3-bucket my-backups --s3-prefix prod/mydb
+# 2a. full backup via URL (alternative to structured flags)
+dbbackup backup --url "postgresql://user:password@host:5432/mydb?sslmode=require" --s3-bucket my-backups --s3-prefix prod/mydb
+dbbackup backup --url "mongodb+srv://user:password@cluster.mongodb.net/mydb?authSource=admin" --s3-bucket my-backups
 
 # 2b. full backup to local filesystem (atomik + sha256 sidecar)
 dbbackup backup --db postgres --host localhost --user backup --database mydb \
@@ -70,10 +75,14 @@ dbbackup restore --db postgres --key postgres/mydb-20260822T120000.sql.gz \
 # MinIO / S3-compatible
 dbbackup backup --db sqlite --database ./app.db \
   --s3-bucket backups --s3-endpoint-url http://localhost:9000 --s3-region us-east-1
+# sqlite via file: URI
+dbbackup backup --url "file:./app.db" --s3-bucket backups --s3-endpoint-url http://localhost:9000 --s3-region us-east-1
 
 # run scheduled jobs from TOML
 dbbackup schedule --daemon --config ./dbbackup.toml
 ```
+
+Structured flags (`--db`/`--host`/`--port`/`--user`/`--database`) and `--url` are two equivalent connection methods. Each database has its own URL semantics (`postgresql://`/`postgres://`, `mysql://` (dbbackup convenience), `mongodb://`/`mongodb+srv://`, `file:` for sqlite). See CLI Reference for details.
 
 ## Configuration
 
@@ -139,14 +148,19 @@ local_path = "/data/backups"
 ```
 dbbackup --help
 dbbackup --version
-dbbackup backup   --db {mysql|postgres|mongo|sqlite} --host --port --user --database
+dbbackup backup   [--db {mysql|postgres|mongo|sqlite}] --host --port --user --database
                   [--password | --password-env VAR | --password-stdin | --ask-password]
+                  [--url URL]
                   [--storage {s3|local} --s3-bucket --s3-prefix --local-path --key/--s3-key --force]
                   [--gzip-level 6] [--config path]
-dbbackup restore  --db ... --key <key> [--s3-key <key> alias] [--storage {s3|local} --local-path --verify] [--target-db ...] [--table <name>]* [--collection <name>]*
-dbbackup test-connection --db ... --host ... --user ...   # no dump/upload
+dbbackup restore  [--db ...] --key <key> [--s3-key <key> alias] [--storage {s3|local} --local-path --verify] [--target-db ...] [--table <name>]* [--collection <name>]* [--url URL] [--host --port --user --database]
+dbbackup test-connection [--db ...] [--host ... --user ... | --url URL]   # no dump/upload
 dbbackup schedule --daemon [--config path]                  # foreground daemon, storage per [[schedule.jobs]] via TOML [storage]
 ```
+
+Connection: structured flags (`--db`+`--host`/`--port`/`--user`/`--database`+password) and `--url` are alternative methods. `--db` is required without `--url`; with `--url` the database type is inferred from the scheme (`postgresql`/`postgres`→postgres, `mongodb`/`mongodb+srv`→mongo, `mysql`→mysql, `file:`→sqlite). `--db`+`--url` must be consistent or fails (exit 10). `--url` cannot be combined with `--host`/`--port`/`--user`/`--database`/password flags.
+
+Supported URL schemes (database-specific, not universal): `postgresql://`, `postgres://`, `mysql://` (dbbackup convenience; verify against adapter), `mongodb://`, `mongodb+srv://`, `file:` (sqlite: `file:./db`, `file:/abs/db`, `file:///abs/db?mode=ro`). SQLite also supports the existing `--db sqlite --database PATH`.
 
 Common flags: `--help`, `--version`, `--verbose`/`--quiet` (logging), `--config path`.
 

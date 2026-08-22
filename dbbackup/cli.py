@@ -58,7 +58,6 @@ def _resolve_password(
         val = os.environ.get(password_env, "")
         if val:
             return val
-        # if env var not set, fall through; CLI will error if still empty and required
     if password_stdin:
         data = sys.stdin.read()
         return data.strip().splitlines()[0] if data.strip() else ""
@@ -66,7 +65,6 @@ def _resolve_password(
         return getpass.getpass("Database password: ")
     if password is not None and password != "":
         return password
-    # no password flag -> prompt interactively if tty, else empty
     if sys.stdin.isatty():
         try:
             return getpass.getpass("Database password (leave empty if none): ")
@@ -92,10 +90,101 @@ def _password_options():
     ]
 
 
+def _resolve_connection(
+    db: str | None,
+    host: str,
+    port: int,
+    user: str,
+    database: str,
+    password: str | None,
+    password_env: str | None,
+    password_stdin: bool,
+    ask_password: bool,
+    url: str | None,
+) -> ConnectionOpts:
+    """Resolve connection from either structured flags or --url (mutually exclusive)."""
+    from dbbackup.core.url import parse_connection_url
+
+    url_val = (url or "").strip()
+    has_structured = any(
+        [
+            host != "",
+            port != 0,
+            user != "",
+            database != "",
+            password is not None and password != "",
+            bool(password_env),
+            bool(password_stdin),
+            bool(ask_password),
+        ]
+    )
+    has_url = bool(url_val)
+
+    if has_url and has_structured:
+        if host != "":
+            flag = "--host"
+        elif port != 0:
+            flag = "--port"
+        elif user != "":
+            flag = "--user"
+        elif database != "":
+            flag = "--database"
+        elif password is not None and password != "":
+            flag = "--password"
+        elif password_env:
+            flag = "--password-env"
+        elif password_stdin:
+            flag = "--password-stdin"
+        else:
+            flag = "--ask-password"
+        err_console.print(
+            f"[red]--url cannot be combined with {flag}. Use either --url or structured connection flags (--db/--host/--port/--user/--database).[/red]"
+        )
+        raise typer.Exit(code=10)
+
+    if has_url:
+        try:
+            url_opts = parse_connection_url(url_val)
+        except ValueError as exc:
+            err_console.print(f"[red]{redact(str(exc))}[/red]")
+            raise typer.Exit(code=10)
+        inferred = url_opts.db_type
+        if db is not None and db != "" and db.strip() != "":
+            db_norm = db.strip().lower()
+            inferred_norm = inferred.lower()
+            db_aliases = {
+                "postgresql": "postgres",
+                "postgres": "postgres",
+                "mongo": "mongo",
+                "mysql": "mysql",
+                "sqlite": "sqlite",
+            }
+            if db_norm not in ("mysql", "postgres", "mongo", "sqlite"):
+                if db_norm not in db_aliases:
+                    err_console.print(f"[red]unsupported --db '{redact(db)}'[/red]")
+                    raise typer.Exit(code=10)
+                db_norm = db_aliases[db_norm]
+            if inferred_norm != db_norm:
+                err_console.print(
+                    f"[red]scheme {redact(inferred)} conflicts with --db {redact(db)}[/red]"
+                )
+                raise typer.Exit(code=10)
+            url_opts.db_type = db_norm
+        return url_opts
+
+    if not db or not db.strip():
+        err_console.print("[red]--db is required (or provide --url for URL mode)[/red]")
+        raise typer.Exit(code=10)
+    pw = _resolve_password(password, password_env, password_stdin, ask_password)
+    return ConnectionOpts(
+        db_type=db, host=host, port=port, user=user, password=pw, database=database
+    )
+
+
 @app.command("backup")
 def backup(
-    db: str = typer.Option(
-        ..., "--db", help="Database type: mysql | postgres | mongo | sqlite (full backup only)"
+    db: str | None = typer.Option(
+        None, "--db", help="Database type: mysql | postgres | mongo | sqlite (full backup only)"
     ),
     host: str = typer.Option("", "--host", help="Database host"),
     port: int = typer.Option(0, "--port", help="Database port"),
@@ -107,6 +196,11 @@ def backup(
     ),
     password_stdin: bool = typer.Option(False, "--password-stdin", help="Read password from stdin"),
     ask_password: bool = typer.Option(False, "--ask-password", help="Prompt for password"),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        help="Database connection URL. Exclusive with --host/--port/--user/--database and password flags.",
+    ),
     s3_bucket: str = typer.Option("", "--s3-bucket", help="S3 bucket (for --storage s3)"),
     s3_prefix: str = typer.Option("", "--s3-prefix", help="S3 key prefix"),
     s3_endpoint_url: str | None = typer.Option(
@@ -126,7 +220,6 @@ def backup(
     ),
 ) -> None:
     """Run a full backup to S3 or local filesystem."""
-    # resolve storage from TOML/env if CLI not given
     cli_storage = storage
     cli_local_path = local_path
     if not cli_storage:
@@ -156,9 +249,8 @@ def backup(
             "[red]S3 bucket is required for --storage s3 (set --s3-bucket or [s3].bucket)[/red]"
         )
         raise typer.Exit(code=10)
-    pw = _resolve_password(password, password_env, password_stdin, ask_password)
-    conn = ConnectionOpts(
-        db_type=db, host=host, port=port, user=user, password=pw, database=database
+    conn = _resolve_connection(
+        db, host, port, user, database, password, password_env, password_stdin, ask_password, url
     )
     opts = BackupOpts(
         connection=conn,
@@ -188,9 +280,7 @@ def backup(
     if result.status == "interrupted":
         err_console.print(f"[yellow]interrupted: {redact(result.error or '')}[/yellow]")
         raise typer.Exit(code=14)
-    # failed
     err_console.print(f"[red]backup failed: {redact(result.error or 'unknown')}[/red]")
-    # BinaryNotFound maps to 11, connection to 12, else 13
     if result.error and "not found on PATH" in result.error:
         raise typer.Exit(code=11)
     if result.error and "connection" in result.error.lower():
@@ -200,7 +290,9 @@ def backup(
 
 @app.command("restore")
 def restore(
-    db: str = typer.Option(..., "--db", help="Database type: mysql | postgres | mongo | sqlite"),
+    db: str | None = typer.Option(
+        None, "--db", help="Database type: mysql | postgres | mongo | sqlite"
+    ),
     s3_key: str | None = typer.Option(
         None, "--s3-key", help="S3 key of the backup to restore (alias: --key)"
     ),
@@ -224,6 +316,11 @@ def restore(
     ),
     password_stdin: bool = typer.Option(False, "--password-stdin", help="Read password from stdin"),
     ask_password: bool = typer.Option(False, "--ask-password", help="Prompt for password"),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        help="Database connection URL. Exclusive with --host/--port/--user/--database and password flags.",
+    ),
     config: str | None = typer.Option(None, "--config", help="Path to TOML config file"),
     s3_bucket: str = typer.Option("", "--s3-bucket", help="S3 bucket holding backup"),
     s3_endpoint_url: str | None = typer.Option(None, "--s3-endpoint-url", help="S3 endpoint URL"),
@@ -239,11 +336,9 @@ def restore(
     if not effective:
         err_console.print("[red]restore requires --key (or --s3-key)[/red]")
         raise typer.Exit(code=10)
-    pw = _resolve_password(password, password_env, password_stdin, ask_password)
-    conn = ConnectionOpts(
-        db_type=db, host=host, port=port, user=user, password=pw, database=database
+    conn = _resolve_connection(
+        db, host, port, user, database, password, password_env, password_stdin, ask_password, url
     )
-    # resolve storage default from TOML if not given
     cli_storage = storage
     cli_local_path = local_path
     if not cli_storage:
@@ -269,13 +364,12 @@ def restore(
         local_path=cli_local_path,
         verify=verify,
     )
-    # attach s3 bucket for restore if provided
     if s3_bucket:
-        opts.s3_bucket = s3_bucket
+        opts.s3_bucket = s3_bucket  # type: ignore[attr-defined]
     if s3_endpoint_url:
-        opts.s3_endpoint_url = s3_endpoint_url
+        opts.s3_endpoint_url = s3_endpoint_url  # type: ignore[attr-defined]
     if s3_region:
-        opts.s3_region = s3_region
+        opts.s3_region = s3_region  # type: ignore[attr-defined]
     from dbbackup.core.restore import run_restore
 
     try:
@@ -298,7 +392,9 @@ def restore(
 
 @app.command("test-connection")
 def test_connection(
-    db: str = typer.Option(..., "--db", help="Database type: mysql | postgres | mongo | sqlite"),
+    db: str | None = typer.Option(
+        None, "--db", help="Database type: mysql | postgres | mongo | sqlite"
+    ),
     host: str = typer.Option("", "--host", help="Database host"),
     port: int = typer.Option(0, "--port", help="Database port"),
     user: str = typer.Option("", "--user", help="Database user"),
@@ -309,15 +405,19 @@ def test_connection(
     ),
     password_stdin: bool = typer.Option(False, "--password-stdin", help="Read password from stdin"),
     ask_password: bool = typer.Option(False, "--ask-password", help="Prompt for password"),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        help="Database connection URL. Exclusive with --host/--port/--user/--database and password flags.",
+    ),
     config: str | None = typer.Option(None, "--config", help="Path to TOML config file"),
 ) -> None:
     """Test database connectivity and required binaries (no backup performed)."""
-    pw = _resolve_password(password, password_env, password_stdin, ask_password)
-    conn = ConnectionOpts(
-        db_type=db, host=host, port=port, user=user, password=pw, database=database
+    conn = _resolve_connection(
+        db, host, port, user, database, password, password_env, password_stdin, ask_password, url
     )
     try:
-        adapter = get_adapter(db)
+        adapter = get_adapter(conn.db_type)
         adapter.test_connection(conn)
     except BinaryNotFoundError as exc:
         err_console.print(f"[red]binary missing: {redact(str(exc))}[/red]")
@@ -343,17 +443,14 @@ def schedule(
         err_console.print("[yellow]schedule requires --daemon[/yellow]")
         console.print("Usage: dbbackup schedule --daemon [--config path]")
         raise typer.Exit(code=10)
-    # Load TOML config (layered) — use config.load_config for jobs
     import tomllib
 
     cfg_path = Path(config) if config else None
-    # load raw TOML for schedule.jobs
     raw: dict = {}
     if cfg_path and cfg_path.exists():
         with open(cfg_path, "rb") as f:
             raw = tomllib.load(f)
     else:
-        # try default location via platformdirs + ./dbbackup.toml
         from dbbackup.config import _user_config_path
 
         for p in [_user_config_path(), Path.cwd() / "dbbackup.toml"]:
@@ -364,7 +461,6 @@ def schedule(
     from dbbackup.core.scheduler import start_scheduler
 
     daemon_obj = start_scheduler(raw)
-    # block until shutdown signal
     code = daemon_obj.wait_for_shutdown()
     raise typer.Exit(code=code)
 

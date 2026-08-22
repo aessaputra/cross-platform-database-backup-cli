@@ -7,7 +7,7 @@
 
 **Tech Stack:** Python >=3.11, Typer + Rich, tomllib/tomli-w, APScheduler, boto3/botocore, httpx, platformdirs, pytest + moto/botocore.stub
 
-**Spec:** `docs/superpowers/specs/2026-08-22-backup-cli-design.md`
+**Specs:** `docs/superpowers/specs/2026-08-22-backup-cli-design.md` + `docs/superpowers/specs/2026-08-22-connection-url-design.md` (dua mode setara: Structured vs URL, mutually exclusive; lihat connection-url spec untuk detail locked)
 
 ## Global Constraints
 - Python >=3.11; stdlib `tomllib` for TOML read (no `tomli` runtime dep); `tomli-w` optional for write.
@@ -57,11 +57,16 @@ dbbackup.spec
 ```python
 from typer.testing import CliRunner
 from dbbackup.cli import app
+
 runner = CliRunner()
+
+
 def test_help_shows_full_only():
     r = runner.invoke(app, ["--help"])
     assert r.exit_code == 0
     assert "full" in r.stdout.lower()
+
+
 def test_version():
     r = runner.invoke(app, ["--version"])
     assert r.exit_code == 0
@@ -90,21 +95,31 @@ def test_version():
 ```python
 # tests/test_redact.py
 from dbbackup.core.redact import redact
+
+
 def test_redacts_password():
-    assert "password" not in redact("password=secret123").lower() or "***" in redact("password=secret123")
+    assert "password" not in redact("password=secret123").lower() or "***" in redact(
+        "password=secret123"
+    )
     assert "***" in redact("passwd=foo")
     assert "***" in redact("https://hooks.slack.com/xxx")
+
+
 def test_redacts_connection_string():
     assert "***" in redact("postgres://user:secret@host/db")
+
 
 # tests/test_compression.py
 from dbbackup.core.compression import compress_stream, decompress_stream
 import io
+
+
 def test_gzip_roundtrip():
     data = b"hello world " * 1000
     out = io.BytesIO()
     compress_stream(io.BytesIO(data), out, level=6)
-    out.seek(0); dec = io.BytesIO()
+    out.seek(0)
+    dec = io.BytesIO()
     decompress_stream(out, dec)
     assert dec.getvalue() == data
 ```
@@ -132,13 +147,17 @@ def test_gzip_roundtrip():
 # tests/test_config.py
 def test_layered_merge(tmp_path):
     from dbbackup.config import load_config
+
     cfg = load_config({"database": "test"})
     assert cfg.database == "test"
+
+
 def test_plaintext_warning(tmp_path, caplog):
     cfg_text = '[connection]\npassword="secret"\n'
     p = tmp_path / "dbbackup.toml"
     p.write_text(cfg_text)
     from dbbackup.config import load_config
+
     load_config({"config": str(p)})
     assert "plaintext" in caplog.text.lower()
 ```
@@ -164,6 +183,8 @@ def test_plaintext_warning(tmp_path, caplog):
 # tests/test_storage_s3.py
 from unittest.mock import MagicMock
 from dbbackup.storage.s3 import S3Backend
+
+
 def test_upload_aborts_on_failure():
     backend = S3Backend(bucket="b", region="us-east-1")
     backend._client = MagicMock()
@@ -197,16 +218,25 @@ def test_upload_aborts_on_failure():
 ```python
 # tests/test_adapters_sqlite.py
 from dbbackup.adapters.registry import get_adapter
+
+
 def test_sqlite_backup_creates_artifact(tmp_path):
     db = tmp_path / "test.db"
-    import sqlite3; sqlite3.connect(str(db)).execute("create table t(x int)").connection.commit()
+    import sqlite3
+
+    sqlite3.connect(str(db)).execute("create table t(x int)").connection.commit()
     adapter = get_adapter("sqlite")
-    artifact = adapter.backup(type("O", (), {"database": str(db), "host": "", "port": 0, "user": "", "password": ""})())
+    artifact = adapter.backup(
+        type("O", (), {"database": str(db), "host": "", "port": 0, "user": "", "password": ""})()
+    )
     assert artifact.extension == ".sqlite.gz" or ".sqlite" in artifact.extension
     artifact.close()
+
+
 def test_registry_unknown_raises():
     from dbbackup.adapters.registry import get_adapter
     import pytest
+
     with pytest.raises(ValueError):
         get_adapter("unknown")
 ```
@@ -233,13 +263,21 @@ def test_registry_unknown_raises():
 # tests/test_adapters_mysql.py
 from unittest.mock import patch, MagicMock
 from dbbackup.adapters.mysql import MySQLAdapter
+
+
 def test_mysql_missing_binary_raises():
     with patch("shutil.which", return_value=None):
         import pytest
+
         with pytest.raises(Exception, match="mysqldump"):
             MySQLAdapter().test_connection(MagicMock())
+
+
 def test_mysql_backup_streams():
-    with patch("shutil.which", return_value="/usr/bin/mysqldump"), patch("subprocess.Popen") as popen:
+    with (
+        patch("shutil.which", return_value="/usr/bin/mysqldump"),
+        patch("subprocess.Popen") as popen,
+    ):
         popen.return_value.stdout = MagicMock()
         popen.return_value.stdout.read.return_value = b"dump"
         artifact = MySQLAdapter().backup(MagicMock(host="h", user="u", password="p", database="db"))
@@ -269,10 +307,13 @@ def test_mysql_backup_streams():
 def test_backup_failure_emits_failed_result():
     from dbbackup.core.backup import run_backup
     from unittest.mock import MagicMock, patch
+
     with patch("dbbackup.core.backup.get_adapter") as ga:
         ga.return_value.backup.side_effect = Exception("boom")
         result = run_backup(MagicMock())
         assert result.status == "failed"
+
+
 def test_restore_failure():
     from dbbackup.core.restore import run_restore
     # similar: S3 download fails -> status failed, redact applied
@@ -302,6 +343,8 @@ def test_restore_failure():
 def test_overlap_no_concurrent_duplicate():
     # schedule 2 jobs, trigger while running -> skipped, warning logged
     pass
+
+
 def test_graceful_shutdown_waits():
     # SIGINT -> stop triggers, wait grace, abort if expired
     pass
@@ -331,12 +374,18 @@ def test_graceful_shutdown_waits():
 def test_password_env_preferred():
     runner = CliRunner()
     with runner.isolated_filesystem():
-        r = runner.invoke(app, ["backup", "--db", "sqlite", "--database", "x.db", "--password-env", "TEST_PW"], env={"TEST_PW": "secret"})
+        r = runner.invoke(
+            app,
+            ["backup", "--db", "sqlite", "--database", "x.db", "--password-env", "TEST_PW"],
+            env={"TEST_PW": "secret"},
+        )
         # should not require --password plaintext
+
 
 # tests/test_notify.py
 def test_slack_not_sent_when_not_configured():
     from dbbackup.core.notify import send_notification
+
     assert send_notification({"status": "success"}) is None  # no webhook -> no-op
 ```
 - [ ] **Step 2: Run tests** `pytest tests/test_cli.py tests/test_notify.py -v` Expected: FAIL
