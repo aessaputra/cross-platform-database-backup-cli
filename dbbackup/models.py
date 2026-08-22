@@ -34,7 +34,7 @@ class BackupOpts:
     s3_region: str | None = None
     gzip_level: int = 6
     config: str | None = None
-    # V1.x: storage selection — single destination per invocation
+    # V1.x storage - Local Filesystem Storage feature (single destination)
     storage_type: str = "s3"  # "s3" | "local"
     local_path: str | None = None
     force: bool = False
@@ -51,7 +51,7 @@ class RestoreOpts:
     target_database: str | None = None
     tables: list[str] = field(default_factory=list)
     collections: list[str] = field(default_factory=list)
-    # V1.x storage selection for restore source
+    # Local Filesystem Storage feature — storage selection for restore source
     storage_type: str = "s3"  # "s3" | "local"
     local_path: str | None = None
     verify: bool = False

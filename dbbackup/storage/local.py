@@ -1,4 +1,4 @@
-"""Local filesystem storage backend — V1.x permanent destination.
+"""Local filesystem storage backend — permanent destination (Local Filesystem Storage feature).
 
 Layout: <root>/<db_type>/<database>-<timestamp><ext> + sidecar <artifact>.json
 Atomicity: same-dir tmp + fsync(file) + os.replace + fsync(dir) (best-effort Windows).

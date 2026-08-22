@@ -1,4 +1,4 @@
-"""Unit + integration tests for LocalBackend — V1.x
+"""Unit + integration tests for LocalBackend — Local Filesystem Storage feature
 
 Happy path, failure paths, traversal, permissions, factory.
 """
@@ -26,6 +26,13 @@ def test_sanitize_database():
     assert sanitize_database("../../etc") == "etc"
     assert sanitize_database("CON") == "_CON"
     assert sanitize_database("") == "unknown"
+    # trailing dot/space stripped
+    assert sanitize_database("mydb.") == "mydb"
+    assert sanitize_database("mydb ") == "mydb"
+    assert sanitize_database("...") == "unknown"
+    assert sanitize_database("a..b") == "a..b"
+    # lpt reserved
+    assert sanitize_database("LPT1") == "_LPT1"
 
 
 def test_upload_and_download_roundtrip(tmp_path: Path):
@@ -41,11 +48,57 @@ def test_upload_and_download_roundtrip(tmp_path: Path):
     meta = json.loads(sidecar.read_text())
     assert "sha256" in meta
     assert meta["bytes"] == dest.stat().st_size
+    assert meta["sha256"] == hashlib.sha256(b"hello world").hexdigest()
+    assert meta["key"] == key
+    assert meta["db_type"] == "postgres"
     # download
     stream = backend.download(key)
     data = stream.read()
     stream.close()
     assert data == b"hello world"
+
+
+def test_upload_with_stream_or_path_path(tmp_path: Path):
+    # cover stream_or_path as Path/str
+    backend = LocalBackend(root=tmp_path)
+    src = tmp_path / "src.bin"
+    src.write_bytes(b"from-path")
+    art = BackupArtifact(db_type="postgres", format="sql", extension=".sql.gz", stream_or_path=src)
+    backend.upload(art, "postgres/a.sql.gz")
+    assert (tmp_path / "postgres/a.sql.gz").read_bytes() == b"from-path"
+    # str path
+    src2 = tmp_path / "src2.bin"
+    src2.write_bytes(b"from-str")
+    art2 = BackupArtifact(db_type="postgres", format="sql", extension=".sql.gz", stream_or_path=str(src2))
+    backend.upload(art2, "postgres/b.sql.gz")
+    assert (tmp_path / "postgres/b.sql.gz").read_bytes() == b"from-str"
+
+
+def test_upload_with_raw_readable(tmp_path: Path):
+    backend = LocalBackend(root=tmp_path)
+    raw = io.BytesIO(b"raw-readable")
+    backend.upload(raw, "postgres/raw.sql.gz")
+    assert (tmp_path / "postgres/raw.sql.gz").read_bytes() == b"raw-readable"
+
+
+def test_upload_empty_artifact(tmp_path: Path):
+    backend = LocalBackend(root=tmp_path)
+    empty = BackupArtifact(db_type="postgres", format="sql", extension=".sql.gz", stream_or_path=None)
+    backend.upload(empty, "postgres/empty.sql.gz")
+    assert (tmp_path / "postgres/empty.sql.gz").read_bytes() == b""
+    # explicit None via stream_or_path branch with None value
+    empty2 = BackupArtifact(db_type="postgres", format="sql", extension=".sql.gz")
+    empty2.stream_or_path = None
+    backend.upload(empty2, "postgres/empty2.sql.gz")
+    assert (tmp_path / "postgres/empty2.sql.gz").read_bytes() == b""
+
+
+def test_upload_with_metadata_enrichment(tmp_path: Path):
+    backend = LocalBackend(root=tmp_path)
+    art = BackupArtifact(db_type="postgres", format="sql", extension=".sql.gz", stream_or_path=io.BytesIO(b"x"), metadata={"custom": "val"})
+    backend.upload(art, "postgres/meta.sql.gz")
+    meta = json.loads((tmp_path / "postgres/meta.sql.gz.json").read_text())
+    assert meta["custom"] == "val"
 
 
 def test_upload_fail_if_exists(tmp_path: Path):
@@ -80,6 +133,50 @@ def test_upload_no_partial_on_failure(tmp_path: Path, monkeypatch):
     # allow tmp leftover but ensure final not exists is the invariant
 
 
+def test_upload_relative_root_resolved(tmp_path: Path, monkeypatch):
+    # Cover __init__ relative root branch
+    monkeypatch.chdir(tmp_path)
+    rel = Path("rel_root")
+    rel.mkdir()
+    backend = LocalBackend(root="rel_root")
+    assert backend.root.is_absolute()
+    backend.upload(_artifact(b"hi"), "postgres/a.sql.gz")
+    assert (backend.root / "postgres/a.sql.gz").exists()
+
+
+def test_upload_world_readable_warning(tmp_path: Path, caplog):
+    if os.name != "posix":
+        pytest.skip("POSIX only")
+    # create world-readable dir
+    root = tmp_path / "world"
+    root.mkdir()
+    root.chmod(0o777)
+    backend = LocalBackend(root=root)
+    # warning should have been logged on init — but caplog may have missed due to import time
+    # trigger by creating new instance with caplog
+    import logging
+    with caplog.at_level(logging.WARNING):
+        LocalBackend(root=root)
+    # at least one warning about world-accessible
+    assert any("world-accessible" in r.message for r in caplog.records)
+
+
+def test_create_parents_false(tmp_path: Path):
+    backend = LocalBackend(root=tmp_path, create_parents=False)
+    with pytest.raises(FileNotFoundError):
+        backend.upload(_artifact(b"hi"), "newdir/file.sql.gz")
+
+
+def test_empty_key_rejected(tmp_path: Path):
+    backend = LocalBackend(root=tmp_path)
+    with pytest.raises(ValueError):
+        backend.upload(_artifact(b"hi"), "")
+    with pytest.raises(ValueError):
+        backend.upload(_artifact(b"hi"), "   ")
+    with pytest.raises(ValueError):
+        backend.download("")
+
+
 def test_traversal_rejected(tmp_path: Path):
     backend = LocalBackend(root=tmp_path)
     art = _artifact(b"hi")
@@ -105,6 +202,26 @@ def test_permissions_posix(tmp_path: Path):
     dest = tmp_path / key
     mode = dest.stat().st_mode & 0o777
     assert mode == 0o600, f"expected 0600 got {oct(mode)}"
+    # parent dir 0700
+    p_mode = (tmp_path / "postgres").stat().st_mode & 0o777
+    assert p_mode == 0o700, f"expected 0700 got {oct(p_mode)}"
+    # sidecar 0600
+    s_mode = Path(str(dest) + ".json").stat().st_mode & 0o777
+    assert s_mode == 0o600
+
+
+def test_download_not_found(tmp_path: Path):
+    backend = LocalBackend(root=tmp_path)
+    with pytest.raises(FileNotFoundError):
+        backend.download("postgres/missing.sql.gz")
+
+
+def test_download_is_directory(tmp_path: Path):
+    backend = LocalBackend(root=tmp_path)
+    (tmp_path / "postgres").mkdir()
+    (tmp_path / "postgres/dir.sql.gz").mkdir()
+    with pytest.raises(IsADirectoryError):
+        backend.download("postgres/dir.sql.gz")
 
 
 def test_symlink_outside_root_rejected(tmp_path: Path):
@@ -139,6 +256,17 @@ def test_factory_local_and_s3(tmp_path: Path):
 
     backend2 = get_storage_backend(opts_s3)
     assert isinstance(backend2, S3Backend)
+
+
+def test_factory_relative_local_path_resolved(tmp_path: Path, monkeypatch):
+    from dbbackup.storage import get_storage_backend
+
+    monkeypatch.chdir(tmp_path)
+    rel = Path("rel2")
+    rel.mkdir()
+    opts = BackupOpts(connection=ConnectionOpts(db_type="postgres"), storage_type="local", local_path="rel2")
+    backend = get_storage_backend(opts)
+    assert backend.root.is_absolute()
 
 
 def test_factory_missing_local_path_raises():
@@ -178,6 +306,25 @@ def test_cli_backup_local_integration(tmp_path: Path):
                 ["restore", "--db", "postgres", "--key", key, "--storage", "local", "--local-path", str(tmp_path), "--verify"],
             )
             assert r2.exit_code == 0, r2.output
+
+
+def test_cli_backup_missing_local_path(tmp_path: Path):
+    from typer.testing import CliRunner
+    from dbbackup.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["backup", "--db", "postgres", "--database", "mydb", "--storage", "local"])
+    assert result.exit_code == 10
+    assert "local-path" in result.output.lower()
+
+
+def test_cli_restore_requires_key(tmp_path: Path):
+    from typer.testing import CliRunner
+    from dbbackup.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["restore", "--db", "postgres", "--storage", "local", "--local-path", str(tmp_path)])
+    assert result.exit_code == 10
 
 
 def test_restore_verify_mismatch(tmp_path: Path):

@@ -46,7 +46,7 @@ class Config:
     host: str = ""
     port: int = 0
     password: str = ""
-    # V1.x storage
+    # Local Filesystem Storage feature
     storage_type: str = "s3"
     local_path: str | None = None
 
