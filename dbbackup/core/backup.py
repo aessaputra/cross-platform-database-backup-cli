@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import io
 import logging
-import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,22 +12,9 @@ from dbbackup.core.compression import compress_stream
 from dbbackup.core.redact import redact
 from dbbackup.models import BackupOpts, BackupResult
 from dbbackup.storage import get_storage_backend
+from dbbackup.storage.local import sanitize_database as _sanitize_db
 
 log = logging.getLogger(__name__)
-
-_WINDOWS_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
-_SAN_RE = re.compile(r"[^A-Za-z0-9._-]+")
-
-
-def _sanitize_db(name: str) -> str:
-    if not name:
-        return "unknown"
-    s = _SAN_RE.sub("_", name).strip("._")
-    if not s:
-        return "unknown"
-    if s.lower() in _WINDOWS_RESERVED:
-        s = f"_{s}"
-    return s.rstrip(". ") or "unknown"
 
 
 def _build_key(opts: BackupOpts, artifact) -> str:

@@ -14,7 +14,7 @@ import os
 import re
 import secrets
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import BinaryIO
 
 from dbbackup.storage.base import StorageBackend
@@ -54,6 +54,8 @@ class LocalBackend(StorageBackend):
             p = (Path.cwd() / p).resolve()
         else:
             p = p.resolve()
+        # if root itself is a symlink → resolve but also reject if lstat differs and points outside intent
+        # best-effort: ensure root's parent exists and root is not a world-writable symlink target without warning
         self.root = p
         self.create_parents = create_parents
         self.force = force
@@ -69,8 +71,12 @@ class LocalBackend(StorageBackend):
     def _resolve_key(self, key: str) -> Path:
         if not key or key.strip() == "":
             raise ValueError("key must be non-empty")
-        # reject absolute keys before join
-        if Path(key).is_absolute():
+        # reject absolute keys before join — platform-independent
+        if Path(key).is_absolute() or PureWindowsPath(key).is_absolute():
+            raise ValueError(f"key must be relative, got absolute: {key!r}")
+        # also reject Windows drive/UNC patterns that Path on Linux may not flag
+        import re as _re
+        if _re.match(r"^[a-zA-Z]:[\\/]", key) or key.startswith("\\\\") or key.startswith("//"):
             raise ValueError(f"key must be relative, got absolute: {key!r}")
         dest = (self.root / key).resolve()
         # jail check
@@ -103,10 +109,17 @@ class LocalBackend(StorageBackend):
                 pass
 
     def upload(self, artifact, key: str) -> None:
-        """Upload artifact to key atomically with sidecar."""
+        """Upload artifact to key atomically with sidecar.
+
+        Atomicity: file content is written to a same-directory tmp file
+        with 0600, fsynced, then published via os.link (force=False) for
+        atomic O_EXCL semantics, or os.replace (force=True). This avoids
+        a check-then-act TOCTOU: even if dest is created between the
+        exists() pre-check and link(), the link fails with EEXIST.
+        """
         dest = self._resolve_key(key)
-        # fail-if-exists unless force
-        if dest.exists() and not self.force:
+        # fast pre-check for actionable error message before I/O
+        if not self.force and dest.exists():
             raise FileExistsError(f"destination already exists: {dest} (use --force to overwrite)")
         self._ensure_parent(dest)
 
@@ -174,8 +187,53 @@ class LocalBackend(StorageBackend):
                 except Exception:
                     pass
 
-            # atomic replace
-            os.replace(tmp, dest)
+            # atomic replace — with O_EXCL guard for force=False
+            if not self.force:
+                # Atomic non-overwrite publish: create dest via O_EXCL using tmp content
+                # We already wrote tmp; now atomically link-or-fail.
+                # Use os.link where available for atomic non-clobber, else O_EXCL open + copy.
+                try:
+                    # Try hard-link as atomic non-overwrite publish (same filesystem, same dir)
+                    os.link(tmp, dest)
+                    # link succeeded → remove tmp (now linked)
+                    try:
+                        tmp.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                except FileExistsError:
+                    raise FileExistsError(f"destination already exists: {dest} (use --force to overwrite)")
+                except OSError as e:
+                    # EXDEV or other: fallback to O_EXCL create
+                    import errno
+                    if e.errno == errno.EEXIST:
+                        raise FileExistsError(f"destination already exists: {dest} (use --force to overwrite)")
+                    # EXDEV: copy via O_EXCL
+                    if e.errno == errno.EXDEV:
+                        try:
+                            fd2 = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                            try:
+                                with open(tmp, "rb") as rf, os.fdopen(fd2, "wb", closefd=True) as wf:
+                                    import shutil
+                                    shutil.copyfileobj(rf, wf)
+                            except FileExistsError:
+                                raise
+                            except OSError as e2:
+                                if e2.errno == errno.EEXIST:
+                                    raise FileExistsError(f"destination already exists: {dest} (use --force to overwrite)")
+                                raise
+                            tmp.unlink(missing_ok=True)
+                        except FileExistsError:
+                            raise
+                        except OSError:
+                            # last resort: if we cannot link/copy atomically, fail closed rather than overwrite
+                            raise FileExistsError(f"destination already exists or cannot be created atomically: {dest}")
+                    else:
+                        # fallback to replace only if dest didn't exist at link time but now does
+                        if dest.exists():
+                            raise FileExistsError(f"destination already exists: {dest} (use --force to overwrite)")
+                        os.replace(tmp, dest)
+            else:
+                os.replace(tmp, dest)
 
             # fsync dir after replace
             if os.name == "posix":

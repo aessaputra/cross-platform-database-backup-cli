@@ -1,4 +1,4 @@
-"""Typer CLI — full-only backups to S3, secure credentials, schedule daemon."""
+"""Typer CLI — full-only backups to S3 or local filesystem. Scheduled storage selection via TOML [[schedule.jobs]]."""
 from __future__ import annotations
 
 import getpass
@@ -124,11 +124,12 @@ def backup(
     if storage_type not in ("s3", "local"):
         err_console.print(f"[red]invalid --storage: {redact(storage_type)} (expected s3|local)[/red]")
         raise typer.Exit(code=10)
-    if storage_type == "local" and not (cli_local_path or s3_bucket):
-        # s3_bucket check is legacy; for local, require local_path
-        if not cli_local_path:
-            err_console.print("[red]--storage local requires --local-path or [storage.local].path in TOML[/red]")
-            raise typer.Exit(code=10)
+    if storage_type == "local" and not cli_local_path:
+        err_console.print("[red]--storage local requires --local-path or [storage.local].path in TOML[/red]")
+        raise typer.Exit(code=10)
+    if storage_type == "s3" and not s3_bucket.strip():
+        err_console.print("[red]S3 bucket is required for --storage s3 (set --s3-bucket or [s3].bucket)[/red]")
+        raise typer.Exit(code=10)
     pw = _resolve_password(password, password_env, password_stdin, ask_password)
     conn = ConnectionOpts(db_type=db, host=host, port=port, user=user, password=pw, database=database)
     opts = BackupOpts(
@@ -284,10 +285,10 @@ def test_connection(
 
 @app.command("schedule")
 def schedule(
-    daemon: bool = typer.Option(False, "--daemon", help="Run scheduler daemon (loads jobs from TOML at startup)"),
+    daemon: bool = typer.Option(False, "--daemon", help="Run scheduler daemon (loads jobs from TOML at startup; storage per [[schedule.jobs]] via [storage] in TOML)"),
     config: Optional[str] = typer.Option(None, "--config", help="Path to TOML config file"),
 ) -> None:
-    """Run scheduled full backups via daemon (full only; jobs from TOML at startup)."""
+    """Run scheduled full backups via daemon (full only; jobs from TOML at startup; storage per-job via [[schedule.jobs]] storage/local_path or global [storage])."""
     if not daemon:
         err_console.print("[yellow]schedule requires --daemon in v1[/yellow]")
         console.print("Usage: dbbackup schedule --daemon [--config path]")

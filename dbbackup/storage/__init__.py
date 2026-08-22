@@ -28,8 +28,10 @@ def get_storage_backend(opts) -> StorageBackend:
         return LocalBackend(root=p, force=force)
     # default s3
     bucket = getattr(opts, "s3_bucket", None) or getattr(opts, "bucket", None) or ""
-    # if bucket missing for s3, let S3Backend or caller handle error; factory doesn't enforce here
+    bucket = str(bucket).strip() if bucket is not None else ""
+    if not bucket:
+        raise ValueError("S3 bucket is required for storage_type='s3' (set --s3-bucket or [s3].bucket)")
     region = getattr(opts, "s3_region", None) or getattr(opts, "region", None)
     endpoint_url = getattr(opts, "s3_endpoint_url", None) or getattr(opts, "endpoint_url", None)
     # propagate local_path not needed
-    return S3Backend(bucket=bucket or "test-bucket", region=region, endpoint_url=endpoint_url)
+    return S3Backend(bucket=bucket, region=region, endpoint_url=endpoint_url)

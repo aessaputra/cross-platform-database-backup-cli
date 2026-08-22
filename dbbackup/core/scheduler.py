@@ -97,26 +97,37 @@ def _make_job_runner(job_id: str, opts_factory, daemon_ref: dict | None = None):
     This is in addition to APScheduler's own max_instances — the wrapper handles
     direct-call callers used by tests.
     """
-    _locks: dict[str, threading.Event] = daemon_ref if daemon_ref is not None else {}  # type: ignore[assignment]
+    # Use a shared active-job registry if provided by SchedulerDaemon
+    _active_registry = daemon_ref if isinstance(daemon_ref, dict) else None
     # fallback per-runner local lock
     _local = threading.Lock()
     _active = {"count": 0}
 
     def runner() -> BackupResult | None:
-        # Overlap guard: skip if already running
-        if _active["count"] != 0:
-            log.warning(
-                "job %s missed trigger — previous run still active, skipped per max_instances=1", job_id
-            )
-            return None
-        with _local:
+        # Register active job in daemon registry for shutdown grace detection
+        if _active_registry is not None:
+            with _local:
+                if _active["count"] != 0:
+                    log.warning(
+                        "job %s missed trigger — previous run still active, skipped per max_instances=1", job_id
+                    )
+                    return None
+                _active["count"] = 1
+                _active_registry[job_id] = _active
+        else:
+            # Overlap guard: skip if already running
             if _active["count"] != 0:
                 log.warning(
                     "job %s missed trigger — previous run still active, skipped per max_instances=1", job_id
                 )
                 return None
-            _active["count"] = 1
-        daemon_ref_str = daemon_ref
+            with _local:
+                if _active["count"] != 0:
+                    log.warning(
+                        "job %s missed trigger — previous run still active, skipped per max_instances=1", job_id
+                    )
+                    return None
+                _active["count"] = 1
         try:
             start = datetime.now(timezone.utc)
             t0 = time.monotonic()
@@ -148,7 +159,11 @@ def _make_job_runner(job_id: str, opts_factory, daemon_ref: dict | None = None):
                 )
         finally:
             _active["count"] = 0
+            if _active_registry is not None:
+                _active_registry.pop(job_id, None)
 
+    # expose for SchedulerDaemon probing
+    runner._active = _active  # type: ignore[attr-defined]
     return runner
 
 
@@ -159,6 +174,7 @@ class SchedulerDaemon:
         self.scheduler = scheduler
         self.shutdown_grace_seconds = shutdown_grace_seconds
         self._shutdown_event = threading.Event()
+        self._active_jobs: dict[str, dict] = {}
         self._original_sigint: Any = None
         self._original_sigterm: Any = None
 
@@ -263,25 +279,22 @@ class SchedulerDaemon:
         return getattr(self.scheduler, name)
 
     def _any_job_running(self) -> bool:
-        # APScheduler 3.x has no public get_running_jobs; probe via executor or job state.
-        # Approximation: if scheduler is running and any executor has active threads.
+        # Use active-job registry populated by _make_job_runner daemons.
+        try:
+            for active in list(self._active_jobs.values()):
+                if active.get("count", 0) != 0:
+                    return True
+        except Exception:
+            pass
+        # Fallback: try APScheduler get_running_jobs if available
         try:
             fn = getattr(self.scheduler, "get_running_jobs", None)
             if callable(fn):
                 return bool(fn())
         except Exception:
             pass
-        # Fallback: check thread-pool executors for busy workers.
-        try:
-            for executor in getattr(self.scheduler, "_executors", {}).values():
-                # ThreadPoolExecutor exposes _pool or _threads internally
-                if hasattr(executor, "_pool") and executor._pool is not None:
-                    # busy if any thread alive beyond idle
-                    pass
-            # Generic fallback: no reliable signal -> assume not running once called
-            return False
-        except Exception:
-            return False
+        # Fallback: no reliable signal -> assume not running
+        return False
 
 
 def start_scheduler(config: dict[str, Any]) -> SchedulerDaemon:
@@ -337,7 +350,7 @@ def start_scheduler(config: dict[str, Any]) -> SchedulerDaemon:
                 if lp:
                     job = {**job, "local_path": lp}
         opts = _job_to_opts(job)
-        runner = _make_job_runner(job_id, lambda o=opts: o)
+        runner = _make_job_runner(job_id, lambda o=opts: o, daemon_ref=None)  # wire after daemon creation
         scheduler.add_job(
             runner,
             trigger=trigger,
@@ -348,5 +361,28 @@ def start_scheduler(config: dict[str, Any]) -> SchedulerDaemon:
         log.info("scheduled job %s (max_instances=1, coalesce=True)", job_id)
 
     daemon = SchedulerDaemon(scheduler, shutdown_grace_seconds)
+    # Re-wire runners to share daemon's active-job registry for grace detection
+    # Patch: recreate runners with daemon_ref so _any_job_running sees active counts
+    for job in scheduler.get_jobs():
+        jid = job.id
+        # find original job config
+        cfg = next((j for j in jobs if str(j.get("id") or j.get("database") or "job") == jid), None)
+        if cfg is not None:
+            # rebuild opts for this job
+            g = config.get("storage") if isinstance(config.get("storage"), dict) else {}
+            gt = str(g.get("type", "")) if isinstance(g, dict) else ""
+            tmp_cfg = dict(cfg)
+            if not tmp_cfg.get("storage") and not tmp_cfg.get("storage_type") and gt.lower() in ("s3", "local"):
+                tmp_cfg["storage"] = gt.lower()
+            if (tmp_cfg.get("storage") or gt.lower()) == "local" and not tmp_cfg.get("local_path"):
+                lp = None
+                if isinstance(g, dict) and isinstance(g.get("local"), dict):
+                    lp = g["local"].get("path")
+                if lp:
+                    tmp_cfg["local_path"] = lp
+            o2 = _job_to_opts(tmp_cfg)
+            new_runner = _make_job_runner(jid, lambda o=o2: o, daemon_ref=daemon._active_jobs)
+            job.func = new_runner  # type: ignore[attr-defined]
+            # also keep reference for direct-call tests (job.func is the runner)
     daemon.start()
     return daemon
