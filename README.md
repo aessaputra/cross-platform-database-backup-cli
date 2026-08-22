@@ -1,15 +1,15 @@
 # dbbackup — Cross-Platform Database Backup CLI
 
-Full, consistent backups for **MySQL, PostgreSQL, MongoDB, and SQLite** — streamed through `gzip` to **S3** (and S3-compatible stores like MinIO). Built with [Typer](https://typer.tiangolo.com/) + [Rich](https://github.com/Textualize/rich) for a fast, predictable CLI on Linux, macOS, and Windows.
+Full, consistent backups for **MySQL, PostgreSQL, MongoDB, and SQLite** — streamed through `gzip` to **S3** (and S3-compatible stores like MinIO) **or the local filesystem**. Built with [Typer](https://typer.tiangolo.com/) + [Rich](https://github.com/Textualize/rich) for a fast, predictable CLI on Linux, macOS, and Windows.
 
-> **v1 scope: full backups only.** Incremental / differential is reserved for v2 via an internal `BackupStrategy` extension point — no `--type` flag, no `NotImplementedError` path.
+> **v1 scope: full backups only.** Incremental / differential is reserved for v2 via an internal `BackupStrategy` extension point — no `--type` flag, no `NotImplementedError` path. The Local Filesystem Storage enhancement adds a second `StorageBackend` without redesign — single destination per backup, `S3` remains the default.
 
 ## Features
 
 - **4 DBMS in v1** — MySQL (`mysqldump`), PostgreSQL (`pg_dump`), MongoDB (`mongodump --archive`), SQLite (`sqlite3` backup API, no binary required)
-- **Bounded streaming** — `dump stdout → gzip → S3 multipart upload` with natural backpressure (SQLite is the documented temp-file exception)
-- **S3 only** — `boto3` credential chain (`env`, `~/.aws/credentials`, SSO, IAM role), `endpoint_url` for MinIO, multipart threshold 100 MB / chunk 10 MB, explicit `botocore` retries, abort on failure
-- **Scheduler daemon** — `dbbackup schedule --daemon` loads `[[schedule.jobs]]` from TOML at startup into APScheduler `MemoryJobStore`, `max_instances=1`, `coalesce=True`, `misfire_grace_time=300s`, graceful `SIGINT`/`SIGTERM` with `shutdown_grace_seconds=60s`
+- **Bounded streaming** — `dump stdout → gzip → upload` with natural backpressure (SQLite is the documented temp-file exception)
+- **S3 + local** — `boto3` credential chain (`env`, `~/.aws/credentials`, SSO, IAM role), `endpoint_url` for MinIO, multipart threshold 100 MB / chunk 10 MB, retries, or `LocalBackend` atomik dengan sidecar `sha256`
+- **Scheduler daemon** — `dbbackup schedule --daemon` loads `[[schedule.jobs]]` from TOML at startup into APScheduler `MemoryJobStore`, `max_instances=1`, `coalesce=True`, `misfire_grace_time=300s`, mixed `local`+`S3` jobs, active-job grace wait, `SIGINT`/`SIGTERM` dengan `shutdown_grace_seconds=60s`
 - **Hardened credentials** — `--ask-password` (interactive), `--password-env VAR`, `--password-stdin` preferred ; TOML plaintext is explicit opt-in (`allow_plaintext_password = true`) with a load-time warning
 - **Centralized redaction** — single `core/redact.py` layer before console, file log, `BackupResult.error`, and Slack payload (DB passwords, URL creds, S3 tokens, webhook URLs)
 - **Secure by default** — owner-restricted temp files, TLS-only S3/Slack, actionable `BinaryNotFoundError` with per-OS hints
@@ -54,10 +54,18 @@ dbbackup backup --db postgres --host localhost --user backup --database mydb \
   --ask-password \
   --s3-bucket my-backups --s3-prefix prod/mydb
 
+# 2b. full backup to local filesystem (atomik + sha256 sidecar)
+dbbackup backup --db postgres --host localhost --user backup --database mydb \
+  --ask-password --storage local --local-path /data/backups
+
 # 3. restore (selective restore per-adapter)
 dbbackup restore --db postgres --s3-key prod/mydb/mydb-20260822T120000.sql.gz --target-db mydb_restored
 dbbackup restore --db mysql --s3-key prod/mydb/mydb-20260822T120000.sql.gz --table users
 dbbackup restore --db mongo --s3-key prod/mydb/mydb-20260822T120000.archive.gz --collection events
+
+# local restore with verify (fail-closed bila sidecar hilang/rusak)
+dbbackup restore --db postgres --key postgres/mydb-20260822T120000.sql.gz \
+  --storage local --local-path /data/backups --verify
 
 # MinIO / S3-compatible
 dbbackup backup --db sqlite --database ./app.db \
@@ -87,6 +95,12 @@ prefix = "prod"
 region = "us-east-1"
 # endpoint_url = "http://localhost:9000"  # MinIO
 
+# Default storage (s3 | local) — per-job dapat override
+[storage]
+type = "s3"
+[storage.local]
+path = "/data/backups"
+
 [schedule]
 shutdown_grace_seconds = 60
 
@@ -102,11 +116,12 @@ s3_bucket = "my-backups"
 s3_prefix = "prod/postgres"
 
 [[schedule.jobs]]
-id = "hourly-sqlite"
+id = "hourly-sqlite-local"
 interval_seconds = 3600
 db_type = "sqlite"
 database = "./app.db"
-s3_bucket = "my-backups"
+storage = "local"
+local_path = "/data/backups"
 
 # Plaintext password in TOML is opt-in only
 # allow_plaintext_password = true
@@ -126,11 +141,11 @@ dbbackup --help
 dbbackup --version
 dbbackup backup   --db {mysql|postgres|mongo|sqlite} --host --port --user --database
                   [--password | --password-env VAR | --password-stdin | --ask-password]
-                  [--s3-bucket --s3-prefix --s3-endpoint-url --s3-region]
+                  [--storage {s3|local} --s3-bucket --s3-prefix --local-path --key/--s3-key --force]
                   [--gzip-level 6] [--config path]
-dbbackup restore  --db ... --s3-key <key> [--target-db ...] [--table <name>]* [--collection <name>]*
+dbbackup restore  --db ... --key <key> [--s3-key <key> alias] [--storage {s3|local} --local-path --verify] [--target-db ...] [--table <name>]* [--collection <name>]*
 dbbackup test-connection --db ... --host ... --user ...   # no dump/upload
-dbbackup schedule --daemon [--config path]                  # foreground daemon in v1
+dbbackup schedule --daemon [--config path]                  # foreground daemon in v1, storage per [[schedule.jobs]] via TOML [storage]
 ```
 
 Common flags: `--help`, `--version`, `--verbose`/`--quiet` (logging), `--config path`.
@@ -177,15 +192,15 @@ dbbackup schedule --daemon --config ./dbbackup.toml
 - `MemoryJobStore` only — jobs disappear when the process stops and are reconstructed from TOML on next start. Never use TOML as a job store.
 - `max_instances=1` per job `id` — the same job never runs concurrently; missed triggers during an active run coalesce into at most one deferred run within `misfire_grace_time` (300s), otherwise skipped with `WARNING`.
 - Two different job `id`s may run concurrently (even against the same DB/host).
-- `SIGINT`/`SIGTERM` → stop accepting triggers → wait up to `shutdown_grace_seconds` (default 60s) → if expired, abort subprocess/multipart, clean temp files, emit `BackupResult{status=interrupted}`, exit `14`.
+- Mixed `local`+`S3` jobs — each job uses its own `StorageBackend` per `storage`/`local_path`, isolated. One failed job never kills daemon.
+- `SIGINT`/`SIGTERM` → stop accepting triggers → **aktif job terdeteksi via registry**, wait up to `shutdown_grace_seconds` (default 60s) → if expired, abort subprocess/multipart, clean temp files, emit `BackupResult{status=interrupted}`, exit `14`.
 
 ## Storage
 
-Public `StorageBackend` in v1 exposes only `upload` + `download`. S3 backend:
+Public `StorageBackend` in v1 exposes only `upload` + `download`. Two backends:
 
-- Multipart for artifacts `>100 MB` (`TransferConfig` 10 MB chunks), `botocore.config.Config(retries={"max_attempts": 3, "mode": "standard"})` (override via TOML `storage.s3.max_attempts`), `endpoint_url` passthrough.
-- `abort_multipart_upload` on terminal failure to avoid orphan parts.
-- Local filesystem is used **internally only** for `core/workdir.py` + `BackupArtifact(format, extension, stream_or_path, needs_cleanup)` cleanup.
+- **S3Backend** (`--storage s3`, default): multipart for artifacts `>100 MB` (`TransferConfig` 10 MB chunks), `botocore.config.Config(retries={"max_attempts": 3, "mode": "standard"})` (override via TOML `storage.s3.max_attempts`), `endpoint_url` passthrough, `abort_multipart_upload` on failure. Missing/empty `--s3-bucket` now **fails closed** (exit `10`) — no `test-bucket` fallback.
+- **LocalBackend** (`--storage local --local-path /data/backups`): `DBBACKUP_STORAGE_TYPE`/`DBBACKUP_LOCAL_PATH` or TOML `[storage]`/`[storage.local].path` + per-job `storage`/`local_path`, single destination per backup, layout `<root>/<db_type>/<database>-<timestamp><ext>` + sidecar `<artifact>.json` (`bytes`+`sha256`, `0600`), `resolve()/is_relative_to()` jail + `PureWindowsPath` + `sanitize_database`, `0700` dirs, `--force` overwrite, `--verify` **fail-closed** (streaming sha).
 
 S3 key: `<prefix>/<database>-<timestamp><extension>` where `<extension>` comes from the adapter (`.sql.gz`, `.archive.gz`, `.sqlite.gz`, `.dump.gz`).
 
@@ -193,8 +208,8 @@ S3 key: `<prefix>/<database>-<timestamp><extension>` where `<extension>` comes f
 
 ```bash
 pip install -e .[dev]
-pytest -q                          # unit + CLI E2E (mocked binaries, 82 tests)
-pytest --cov=dbbackup -q           # coverage (76% core+adapters+storage+config)
+pytest -q                          # unit + CLI E2E (mocked binaries, 135 tests)
+pytest --cov=dbbackup -q           # coverage (77% total, storage/local.py 82%)
 pytest --integration -q            # real DB E2E via testcontainers + MinIO (gated)
 
 hatch build                        # wheel + sdist  → dist/
@@ -208,12 +223,12 @@ pyinstaller dbbackup.spec          # single-file binary → dist/dbbackup
 ```
 dbbackup/
   cli.py               Typer app: backup, restore, test-connection, schedule --daemon
-  config.py            layered TOML loader (tomllib, platformdirs)
-  models.py            ConnectionOpts, BackupOpts, RestoreOpts, BackupArtifact, BackupResult
+  config.py            layered TOML loader (tomllib, platformdirs, [storage]/DBBACKUP_*)
+  models.py            ConnectionOpts, BackupOpts (--storage/--local-path), RestoreOpts (--key alias, --verify), BackupArtifact, BackupResult
   adapters/            DBAdapter ABC + mysql/postgres/mongo/sqlite + registry
-  storage/             StorageBackend ABC + S3Backend
-  core/                backup, restore, scheduler, compression, workdir, logging_setup, notify, redact
-tests/                 mocked subprocess/shutil.which, moto/botocore stub, CliRunner, scheduler overlap
+  storage/             StorageBackend ABC + S3Backend + LocalBackend (--force, sidecar sha)
+  core/                backup, restore (--verify streaming), scheduler (active-job registry), compression, workdir, logging_setup, notify, redact
+tests/                 mocked subprocess/shutil.which, moto/botocore stub, CliRunner, scheduler overlap, EXDEV/EEXIST atomic, verify fail-closed, S3 bucket closed
 dbbackup.spec          PyInstaller single-file spec (v1 distribution format)
 .github/workflows/     ci.yml (unit+E2E on ubuntu/macos/windows) + integration.yml (periodic, --integration)
 ```
@@ -223,6 +238,6 @@ dbbackup.spec          PyInstaller single-file spec (v1 distribution format)
 
 ## Limitations (v1 Non-Goals)
 
-Incremental/differential backups, GCS/Azure Blob, public `--storage local`, `StorageBackend.list()`/`delete()`, `DBAdapter.list_targets()`, `systemd`/Windows Service integration, auto-update, and code signing are out of scope for v1.
+Incremental/differential backups, GCS/Azure Blob, replication/local+S3 fan-out, retention, `StorageBackend.list()`/`delete()`, `DBAdapter.list_targets()`, `systemd`/Windows Service integration, auto-update, and code signing are out of scope for v1. The Local Filesystem Storage enhancement is strictly second `StorageBackend`, single destination, `upload`/`download` only.
 
 See `docs/superpowers/specs/2026-08-22-backup-cli-design.md` for the locked spec and `docs/superpowers/plans/2026-08-22-backup-cli-implementation.md` for the implementation plan.
