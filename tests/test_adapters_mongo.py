@@ -37,7 +37,9 @@ def test_mongo_backup_streams():
         assert artifact.extension == ".archive.gz"
         assert artifact.format == "archive"
         assert artifact.db_type == "mongo"
-        assert artifact.stream_or_path is popen.return_value.stdout
+        # With password hardening, stdout is wrapped for --config cleanup; unwrap for check
+        underlying = getattr(artifact.stream_or_path, "wrapped_stdout", artifact.stream_or_path)
+        assert underlying is popen.return_value.stdout
 
 
 def test_mongo_missing_binary_hint_contains_install_guidance():
