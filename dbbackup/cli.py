@@ -18,7 +18,7 @@ from dbbackup.models import BackupOpts, ConnectionOpts, RestoreOpts
 
 app = typer.Typer(
     name="dbbackup",
-    help="Cross-platform database backup CLI — full backups only in v1 (incremental/differential reserved for v2).",
+    help="Cross-platform database backup CLI — full database backups.",
     add_completion=False,
     no_args_is_help=True,
 )
@@ -125,7 +125,7 @@ def backup(
         False, "--force", help="Allow overwriting existing backup at destination key"
     ),
 ) -> None:
-    """Run a full backup to S3 or local filesystem (v1: full only)."""
+    """Run a full backup to S3 or local filesystem."""
     # resolve storage from TOML/env if CLI not given
     cli_storage = storage
     cli_local_path = local_path
@@ -338,9 +338,9 @@ def schedule(
     ),
     config: str | None = typer.Option(None, "--config", help="Path to TOML config file"),
 ) -> None:
-    """Run scheduled full backups via daemon (full only; jobs from TOML at startup; storage per-job via [[schedule.jobs]] storage/local_path or global [storage])."""
+    """Run scheduled full backups via daemon (jobs from TOML at startup; storage per-job via [[schedule.jobs]] storage/local_path or global [storage])."""
     if not daemon:
-        err_console.print("[yellow]schedule requires --daemon in v1[/yellow]")
+        err_console.print("[yellow]schedule requires --daemon[/yellow]")
         console.print("Usage: dbbackup schedule --daemon [--config path]")
         raise typer.Exit(code=10)
     # Load TOML config (layered) — use config.load_config for jobs
