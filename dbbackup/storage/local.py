@@ -96,10 +96,11 @@ class LocalBackend(StorageBackend):
             if not dest.is_relative_to(self.root):
                 raise ValueError(f"key escapes storage root: {key!r} -> {dest}")
         except AttributeError:
-            # fallback for <3.9
+            # fallback for <3.9 — relative_to may itself call is_relative_to
+            # internally (Python 3.12+), so handle both ValueError and AttributeError
             try:
                 dest.relative_to(self.root)
-            except ValueError:
+            except (ValueError, AttributeError):
                 raise ValueError(f"key escapes storage root: {key!r} -> {dest}")
         # also reject keys that after join still contain .. traversal (already caught via resolve, but be explicit)
         return dest
