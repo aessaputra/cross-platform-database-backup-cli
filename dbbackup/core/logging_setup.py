@@ -1,4 +1,5 @@
 """Logging setup: RotatingFileHandler via platformdirs + Rich console + redact filter."""
+
 from __future__ import annotations
 
 import json

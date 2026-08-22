@@ -1,4 +1,5 @@
 """Task 4 — S3 backend: abort on failure, endpoint_url, retry config, multipart threshold."""
+
 from __future__ import annotations
 
 import io
@@ -19,9 +20,14 @@ def test_upload_aborts_on_failure():
     except Exception:
         pass
     # abort must be attempted on terminal failure to avoid orphan parts
-    assert backend._client.abort_multipart_upload.called or backend._client.abort_multipart_upload.call_count >= 0
+    assert (
+        backend._client.abort_multipart_upload.called
+        or backend._client.abort_multipart_upload.call_count >= 0
+    )
     # stricter: must have been called at least once
-    assert backend._client.abort_multipart_upload.call_count >= 1, "abort_multipart_upload not called on upload failure"
+    assert backend._client.abort_multipart_upload.call_count >= 1, (
+        "abort_multipart_upload not called on upload failure"
+    )
 
 
 def test_endpoint_url_passed_to_boto3():

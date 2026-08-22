@@ -1,18 +1,18 @@
 """Tests for SQLite adapter and registry."""
-import gzip
+
 import sqlite3
-import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
 from dbbackup.adapters.registry import get_adapter
-from dbbackup.models import BackupArtifact, ConnectionOpts, RestoreOpts
+from dbbackup.models import ConnectionOpts, RestoreOpts
 
 
 def _make_opts(database: str):
-    return type("O", (), {"database": database, "host": "", "port": 0, "user": "", "password": ""})()
+    return type(
+        "O", (), {"database": database, "host": "", "port": 0, "user": "", "password": ""}
+    )()
 
 
 def test_sqlite_backup_creates_artifact(tmp_path):

@@ -48,6 +48,7 @@ def test_redacts_none_and_empty():
     assert redact(None) == ""  # type: ignore[arg-type]
     assert redact("hello world") == "hello world"
 
+
 def test_redacts_multiple_secrets():
     text = "password=foo postgres://u:s3cret@host/db https://hooks.slack.com/xxx"
     out = redact(text)

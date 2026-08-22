@@ -1,4 +1,5 @@
 """Adapter registry for DBAdapter resolution."""
+
 from __future__ import annotations
 
 from dbbackup.adapters.base import DBAdapter

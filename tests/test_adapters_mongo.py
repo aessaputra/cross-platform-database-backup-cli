@@ -1,4 +1,5 @@
 """Tests for MongoDB streaming adapter."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -9,19 +10,17 @@ import pytest
 def test_mongo_missing_binary_raises():
     from dbbackup.adapters.mongo import MongoAdapter
 
-    with patch("shutil.which", return_value=None):
-        with pytest.raises(Exception, match="mongodump"):
-            MongoAdapter().test_connection(MagicMock())
+    with patch("shutil.which", return_value=None), pytest.raises(Exception, match="mongodump"):
+        MongoAdapter().test_connection(MagicMock())
 
 
 def test_mongo_backup_missing_binary_raises():
     from dbbackup.adapters.mongo import MongoAdapter
 
-    with patch("shutil.which", return_value=None):
-        with pytest.raises(Exception, match="mongodump"):
-            MongoAdapter().backup(
-                MagicMock(host="h", user="u", password="p", database="db", port=27017)
-            )
+    with patch("shutil.which", return_value=None), pytest.raises(Exception, match="mongodump"):
+        MongoAdapter().backup(
+            MagicMock(host="h", user="u", password="p", database="db", port=27017)
+        )
 
 
 def test_mongo_backup_streams():

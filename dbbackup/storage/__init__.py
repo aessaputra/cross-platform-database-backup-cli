@@ -1,9 +1,10 @@
 """Storage backends — S3 + local with factory."""
+
 from dbbackup.storage.base import StorageBackend
 from dbbackup.storage.local import LocalBackend
 from dbbackup.storage.s3 import S3Backend
 
-__all__ = ["StorageBackend", "S3Backend", "LocalBackend", "get_storage_backend"]
+__all__ = ["LocalBackend", "S3Backend", "StorageBackend", "get_storage_backend"]
 
 
 def get_storage_backend(opts) -> StorageBackend:
@@ -30,7 +31,9 @@ def get_storage_backend(opts) -> StorageBackend:
     bucket = getattr(opts, "s3_bucket", None) or getattr(opts, "bucket", None) or ""
     bucket = str(bucket).strip() if bucket is not None else ""
     if not bucket:
-        raise ValueError("S3 bucket is required for storage_type='s3' (set --s3-bucket or [s3].bucket)")
+        raise ValueError(
+            "S3 bucket is required for storage_type='s3' (set --s3-bucket or [s3].bucket)"
+        )
     region = getattr(opts, "s3_region", None) or getattr(opts, "region", None)
     endpoint_url = getattr(opts, "s3_endpoint_url", None) or getattr(opts, "endpoint_url", None)
     # propagate local_path not needed

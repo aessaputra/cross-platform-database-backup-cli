@@ -7,6 +7,7 @@ its own artifact representation (streaming vs temp-file) and declares its
 ``list_targets()`` is intentionally excluded from the ABC per the design spec
 (§1.4) — selective restore is handled per-adapter through ``RestoreOpts``.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -23,7 +24,7 @@ class DBAdapter(ABC):
     name: str = "base"
 
     @abstractmethod
-    def test_connection(self, opts: "ConnectionOpts") -> None:
+    def test_connection(self, opts: ConnectionOpts) -> None:
         """Verify connectivity/credentials for the target database.
 
         Should be lightweight (no dump/upload). Raises on failure with an
@@ -32,7 +33,7 @@ class DBAdapter(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def backup(self, opts: "ConnectionOpts") -> "BackupArtifact":
+    def backup(self, opts: ConnectionOpts) -> BackupArtifact:
         """Produce a full backup as a ``BackupArtifact``.
 
         The adapter does NOT take a destination stream; the orchestrator
@@ -43,8 +44,8 @@ class DBAdapter(ABC):
     @abstractmethod
     def restore(
         self,
-        artifact: "BackupArtifact | BinaryIO",
-        opts: "RestoreOpts",
+        artifact: BackupArtifact | BinaryIO,
+        opts: RestoreOpts,
     ) -> None:
         """Restore from a backup ``artifact`` into the target described by ``opts``.
 

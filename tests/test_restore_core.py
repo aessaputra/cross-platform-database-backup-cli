@@ -1,9 +1,8 @@
 """Task 7 TDD: restore orchestration."""
+
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from dbbackup.models import RestoreOpts, ConnectionOpts
+from dbbackup.models import ConnectionOpts, RestoreOpts
 
 
 def _opts():
@@ -32,9 +31,10 @@ def test_restore_failure_status_failed():
 
 
 def test_restore_selective_table_passes_through():
-    from dbbackup.core.restore import run_restore
-    import io
     import gzip
+    import io
+
+    from dbbackup.core.restore import run_restore
 
     # real gz artifact for successful path
     raw = b"select * from t"

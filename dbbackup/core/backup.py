@@ -1,11 +1,11 @@
 """Backup orchestration: adapter -> gzip streaming -> storage upload -> BackupResult."""
+
 from __future__ import annotations
 
 import io
 import logging
 import time
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 
 from dbbackup.adapters.registry import get_adapter
 from dbbackup.core.compression import compress_stream
@@ -26,7 +26,7 @@ def _build_key(opts: BackupOpts, artifact) -> str:
     """
     ext = artifact.extension or ".dump"
     db_type = opts.connection.db_type or "unknown"
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     safe_db = _sanitize_db(opts.connection.database or "unknown")
     key_suffix = f"{safe_db}-{ts}{ext}"
     if opts.storage_type == "local":
@@ -36,7 +36,7 @@ def _build_key(opts: BackupOpts, artifact) -> str:
 
 
 def run_backup(opts: BackupOpts) -> BackupResult:
-    start = datetime.now(timezone.utc)
+    start = datetime.now(UTC)
     t0 = time.monotonic()
     try:
         db_type = opts.connection.db_type
@@ -53,13 +53,11 @@ def run_backup(opts: BackupOpts) -> BackupResult:
         # Streaming: artifact.open_stream() -> compress -> storage upload
         src = artifact.open_stream()
         compressed = io.BytesIO()
-        src_closed = False
         try:
             compress_stream(src, compressed, level=opts.gzip_level)
         finally:
             try:
                 src.close()
-                src_closed = True
             except Exception:
                 pass
         compressed.seek(0)
@@ -85,7 +83,7 @@ def run_backup(opts: BackupOpts) -> BackupResult:
             artifact.close()
         except Exception:
             pass
-        end = datetime.now(timezone.utc)
+        end = datetime.now(UTC)
         duration = int((time.monotonic() - t0) * 1000)
         return BackupResult(
             status="success",
@@ -98,7 +96,7 @@ def run_backup(opts: BackupOpts) -> BackupResult:
             database=database,
         )
     except KeyboardInterrupt as exc:
-        end = datetime.now(timezone.utc)
+        end = datetime.now(UTC)
         return BackupResult(
             status="interrupted",
             start_time=start,
@@ -109,7 +107,7 @@ def run_backup(opts: BackupOpts) -> BackupResult:
             database=getattr(opts.connection, "database", None),
         )
     except Exception as exc:
-        end = datetime.now(timezone.utc)
+        end = datetime.now(UTC)
         msg = redact(str(exc))
         log.error("backup failed: %s", msg)
         return BackupResult(

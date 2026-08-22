@@ -3,13 +3,18 @@ import logging
 from dbbackup.core.logging_setup import RedactFilter, setup_logging
 
 
-def test_redact_filter_redacts_password(caplog=None):  # noqa: ARG001
+def test_redact_filter_redacts_password(caplog=None):
     # I3 fix: RedactFilter no longer mutates LogRecord in place; redaction
     # happens at format time via RedactingFormatter/JsonFormatter (propagate-safe).
     f = RedactFilter()
     record = logging.LogRecord(
-        name="test", level=logging.INFO, pathname="", lineno=0,
-        msg="password=secret123", args=(), exc_info=None,
+        name="test",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="password=secret123",
+        args=(),
+        exc_info=None,
     )
     assert f.filter(record)
     # filter must not mutate the shared record
@@ -63,7 +68,7 @@ def test_setup_logging_redacts_file_output(tmp_path, monkeypatch):
         except Exception:
             pass
     # check file content is redacted
-    log_dir = tmp_path / "logs2"
+    tmp_path / "logs2"
     # also try state2 if fallback
     candidates = list(tmp_path.rglob("*.log"))
     assert candidates, f"no log file created, tmp contents: {list(tmp_path.rglob('*'))}"

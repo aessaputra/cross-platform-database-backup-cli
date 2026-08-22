@@ -1,4 +1,5 @@
 """Slack notify — opt-in via DBBACKUP_SLACK_WEBHOOK_URL env or TOML (opt-in with warning)."""
+
 from __future__ import annotations
 
 import logging
@@ -23,7 +24,11 @@ def send_notification(payload: dict) -> None:
         log.warning("slack webhook must be https — skipped")
         return
     # redact payload before send
-    safe_payload = {k: redact(str(v)) if isinstance(v, str) else v for k, v in payload.items() if k != "webhook_url"}
+    safe_payload = {
+        k: redact(str(v)) if isinstance(v, str) else v
+        for k, v in payload.items()
+        if k != "webhook_url"
+    }
     safe_payload.setdefault("status", payload.get("status", "unknown"))
     try:
         with httpx.Client(timeout=5.0) as client:

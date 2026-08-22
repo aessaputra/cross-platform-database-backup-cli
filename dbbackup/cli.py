@@ -1,11 +1,11 @@
 """Typer CLI — full-only backups to S3 or local filesystem. Scheduled storage selection via TOML [[schedule.jobs]]."""
+
 from __future__ import annotations
 
 import getpass
 import os
 import sys
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -49,8 +49,8 @@ def main(
 
 
 def _resolve_password(
-    password: Optional[str],
-    password_env: Optional[str],
+    password: str | None,
+    password_env: str | None,
     password_stdin: bool,
     ask_password: bool,
 ) -> str:
@@ -77,8 +77,16 @@ def _resolve_password(
 
 def _password_options():
     return [
-        typer.Option(None, "--password", help="Database password (discouraged; prefer --password-env/--ask-password)"),
-        typer.Option(None, "--password-env", help="Env var name holding password (preferred: DBBACKUP_PASSWORD)"),
+        typer.Option(
+            None,
+            "--password",
+            help="Database password (discouraged; prefer --password-env/--ask-password)",
+        ),
+        typer.Option(
+            None,
+            "--password-env",
+            help="Env var name holding password (preferred: DBBACKUP_PASSWORD)",
+        ),
         typer.Option(False, "--password-stdin", help="Read password from stdin (first line)"),
         typer.Option(False, "--ask-password", help="Prompt for password interactively"),
     ]
@@ -86,24 +94,36 @@ def _password_options():
 
 @app.command("backup")
 def backup(
-    db: str = typer.Option(..., "--db", help="Database type: mysql | postgres | mongo | sqlite (full backup only)"),
+    db: str = typer.Option(
+        ..., "--db", help="Database type: mysql | postgres | mongo | sqlite (full backup only)"
+    ),
     host: str = typer.Option("", "--host", help="Database host"),
     port: int = typer.Option(0, "--port", help="Database port"),
     user: str = typer.Option("", "--user", help="Database user"),
     database: str = typer.Option("", "--database", help="Database name"),
-    password: Optional[str] = typer.Option(None, "--password", help="Database password (discouraged)"),
-    password_env: Optional[str] = typer.Option(None, "--password-env", help="Env var holding password"),
+    password: str | None = typer.Option(None, "--password", help="Database password (discouraged)"),
+    password_env: str | None = typer.Option(
+        None, "--password-env", help="Env var holding password"
+    ),
     password_stdin: bool = typer.Option(False, "--password-stdin", help="Read password from stdin"),
     ask_password: bool = typer.Option(False, "--ask-password", help="Prompt for password"),
     s3_bucket: str = typer.Option("", "--s3-bucket", help="S3 bucket (for --storage s3)"),
     s3_prefix: str = typer.Option("", "--s3-prefix", help="S3 key prefix"),
-    s3_endpoint_url: Optional[str] = typer.Option(None, "--s3-endpoint-url", help="S3-compatible endpoint URL (MinIO)"),
-    s3_region: Optional[str] = typer.Option(None, "--s3-region", help="S3 region"),
+    s3_endpoint_url: str | None = typer.Option(
+        None, "--s3-endpoint-url", help="S3-compatible endpoint URL (MinIO)"
+    ),
+    s3_region: str | None = typer.Option(None, "--s3-region", help="S3 region"),
     gzip_level: int = typer.Option(6, "--gzip-level", help="gzip compression level 1-9"),
-    config: Optional[str] = typer.Option(None, "--config", help="Path to TOML config file"),
-    storage: Optional[str] = typer.Option(None, "--storage", help="Storage type: s3 | local (default: s3 or TOML [storage].type)"),
-    local_path: Optional[str] = typer.Option(None, "--local-path", help="Local storage root path (for --storage local)"),
-    force: bool = typer.Option(False, "--force", help="Allow overwriting existing backup at destination key"),
+    config: str | None = typer.Option(None, "--config", help="Path to TOML config file"),
+    storage: str | None = typer.Option(
+        None, "--storage", help="Storage type: s3 | local (default: s3 or TOML [storage].type)"
+    ),
+    local_path: str | None = typer.Option(
+        None, "--local-path", help="Local storage root path (for --storage local)"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Allow overwriting existing backup at destination key"
+    ),
 ) -> None:
     """Run a full backup to S3 or local filesystem (v1: full only)."""
     # resolve storage from TOML/env if CLI not given
@@ -122,16 +142,24 @@ def backup(
             pass
     storage_type = (cli_storage or "s3").lower()
     if storage_type not in ("s3", "local"):
-        err_console.print(f"[red]invalid --storage: {redact(storage_type)} (expected s3|local)[/red]")
+        err_console.print(
+            f"[red]invalid --storage: {redact(storage_type)} (expected s3|local)[/red]"
+        )
         raise typer.Exit(code=10)
     if storage_type == "local" and not cli_local_path:
-        err_console.print("[red]--storage local requires --local-path or [storage.local].path in TOML[/red]")
+        err_console.print(
+            "[red]--storage local requires --local-path or [storage.local].path in TOML[/red]"
+        )
         raise typer.Exit(code=10)
     if storage_type == "s3" and not s3_bucket.strip():
-        err_console.print("[red]S3 bucket is required for --storage s3 (set --s3-bucket or [s3].bucket)[/red]")
+        err_console.print(
+            "[red]S3 bucket is required for --storage s3 (set --s3-bucket or [s3].bucket)[/red]"
+        )
         raise typer.Exit(code=10)
     pw = _resolve_password(password, password_env, password_stdin, ask_password)
-    conn = ConnectionOpts(db_type=db, host=host, port=port, user=user, password=pw, database=database)
+    conn = ConnectionOpts(
+        db_type=db, host=host, port=port, user=user, password=pw, database=database
+    )
     opts = BackupOpts(
         connection=conn,
         s3_bucket=s3_bucket,
@@ -173,26 +201,38 @@ def backup(
 @app.command("restore")
 def restore(
     db: str = typer.Option(..., "--db", help="Database type: mysql | postgres | mongo | sqlite"),
-    s3_key: Optional[str] = typer.Option(None, "--s3-key", help="S3 key of the backup to restore (alias: --key)"),
-    key: Optional[str] = typer.Option(None, "--key", help="Backup key to restore (preferred; --s3-key is alias)"),
-    target_db: Optional[str] = typer.Option(None, "--target-db", help="Target database name"),
-    table: list[str] = typer.Option(None, "--table", help="Table to restore (repeatable; mysql/postgres)"),
-    collection: list[str] = typer.Option(None, "--collection", help="Collection to restore (repeatable; mongo)"),
+    s3_key: str | None = typer.Option(
+        None, "--s3-key", help="S3 key of the backup to restore (alias: --key)"
+    ),
+    key: str | None = typer.Option(
+        None, "--key", help="Backup key to restore (preferred; --s3-key is alias)"
+    ),
+    target_db: str | None = typer.Option(None, "--target-db", help="Target database name"),
+    table: list[str] = typer.Option(
+        None, "--table", help="Table to restore (repeatable; mysql/postgres)"
+    ),
+    collection: list[str] = typer.Option(
+        None, "--collection", help="Collection to restore (repeatable; mongo)"
+    ),
     host: str = typer.Option("", "--host", help="Database host"),
     port: int = typer.Option(0, "--port", help="Database port"),
     user: str = typer.Option("", "--user", help="Database user"),
     database: str = typer.Option("", "--database", help="Database name"),
-    password: Optional[str] = typer.Option(None, "--password", help="Database password"),
-    password_env: Optional[str] = typer.Option(None, "--password-env", help="Env var holding password"),
+    password: str | None = typer.Option(None, "--password", help="Database password"),
+    password_env: str | None = typer.Option(
+        None, "--password-env", help="Env var holding password"
+    ),
     password_stdin: bool = typer.Option(False, "--password-stdin", help="Read password from stdin"),
     ask_password: bool = typer.Option(False, "--ask-password", help="Prompt for password"),
-    config: Optional[str] = typer.Option(None, "--config", help="Path to TOML config file"),
+    config: str | None = typer.Option(None, "--config", help="Path to TOML config file"),
     s3_bucket: str = typer.Option("", "--s3-bucket", help="S3 bucket holding backup"),
-    s3_endpoint_url: Optional[str] = typer.Option(None, "--s3-endpoint-url", help="S3 endpoint URL"),
-    s3_region: Optional[str] = typer.Option(None, "--s3-region", help="S3 region"),
-    storage: Optional[str] = typer.Option(None, "--storage", help="Storage type: s3 | local"),
-    local_path: Optional[str] = typer.Option(None, "--local-path", help="Local storage root path"),
-    verify: bool = typer.Option(False, "--verify", help="Verify SHA-256 sidecar before restore (local only)"),
+    s3_endpoint_url: str | None = typer.Option(None, "--s3-endpoint-url", help="S3 endpoint URL"),
+    s3_region: str | None = typer.Option(None, "--s3-region", help="S3 region"),
+    storage: str | None = typer.Option(None, "--storage", help="Storage type: s3 | local"),
+    local_path: str | None = typer.Option(None, "--local-path", help="Local storage root path"),
+    verify: bool = typer.Option(
+        False, "--verify", help="Verify SHA-256 sidecar before restore (local only)"
+    ),
 ) -> None:
     """Restore a full backup from S3 or local filesystem. Selective --table/--collection per adapter."""
     effective = key or s3_key
@@ -200,7 +240,9 @@ def restore(
         err_console.print("[red]restore requires --key (or --s3-key)[/red]")
         raise typer.Exit(code=10)
     pw = _resolve_password(password, password_env, password_stdin, ask_password)
-    conn = ConnectionOpts(db_type=db, host=host, port=port, user=user, password=pw, database=database)
+    conn = ConnectionOpts(
+        db_type=db, host=host, port=port, user=user, password=pw, database=database
+    )
     # resolve storage default from TOML if not given
     cli_storage = storage
     cli_local_path = local_path
@@ -229,11 +271,11 @@ def restore(
     )
     # attach s3 bucket for restore if provided
     if s3_bucket:
-        setattr(opts, "s3_bucket", s3_bucket)
+        opts.s3_bucket = s3_bucket
     if s3_endpoint_url:
-        setattr(opts, "s3_endpoint_url", s3_endpoint_url)
+        opts.s3_endpoint_url = s3_endpoint_url
     if s3_region:
-        setattr(opts, "s3_region", s3_region)
+        opts.s3_region = s3_region
     from dbbackup.core.restore import run_restore
 
     try:
@@ -261,15 +303,19 @@ def test_connection(
     port: int = typer.Option(0, "--port", help="Database port"),
     user: str = typer.Option("", "--user", help="Database user"),
     database: str = typer.Option("", "--database", help="Database name"),
-    password: Optional[str] = typer.Option(None, "--password", help="Database password"),
-    password_env: Optional[str] = typer.Option(None, "--password-env", help="Env var holding password"),
+    password: str | None = typer.Option(None, "--password", help="Database password"),
+    password_env: str | None = typer.Option(
+        None, "--password-env", help="Env var holding password"
+    ),
     password_stdin: bool = typer.Option(False, "--password-stdin", help="Read password from stdin"),
     ask_password: bool = typer.Option(False, "--ask-password", help="Prompt for password"),
-    config: Optional[str] = typer.Option(None, "--config", help="Path to TOML config file"),
+    config: str | None = typer.Option(None, "--config", help="Path to TOML config file"),
 ) -> None:
     """Test database connectivity and required binaries (no backup performed)."""
     pw = _resolve_password(password, password_env, password_stdin, ask_password)
-    conn = ConnectionOpts(db_type=db, host=host, port=port, user=user, password=pw, database=database)
+    conn = ConnectionOpts(
+        db_type=db, host=host, port=port, user=user, password=pw, database=database
+    )
     try:
         adapter = get_adapter(db)
         adapter.test_connection(conn)
@@ -285,8 +331,12 @@ def test_connection(
 
 @app.command("schedule")
 def schedule(
-    daemon: bool = typer.Option(False, "--daemon", help="Run scheduler daemon (loads jobs from TOML at startup; storage per [[schedule.jobs]] via [storage] in TOML)"),
-    config: Optional[str] = typer.Option(None, "--config", help="Path to TOML config file"),
+    daemon: bool = typer.Option(
+        False,
+        "--daemon",
+        help="Run scheduler daemon (loads jobs from TOML at startup; storage per [[schedule.jobs]] via [storage] in TOML)",
+    ),
+    config: str | None = typer.Option(None, "--config", help="Path to TOML config file"),
 ) -> None:
     """Run scheduled full backups via daemon (full only; jobs from TOML at startup; storage per-job via [[schedule.jobs]] storage/local_path or global [storage])."""
     if not daemon:
@@ -294,7 +344,6 @@ def schedule(
         console.print("Usage: dbbackup schedule --daemon [--config path]")
         raise typer.Exit(code=10)
     # Load TOML config (layered) — use config.load_config for jobs
-    from dbbackup.config import load_config as _load_config
     import tomllib
 
     cfg_path = Path(config) if config else None

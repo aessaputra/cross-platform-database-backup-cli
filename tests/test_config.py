@@ -1,7 +1,5 @@
 import logging
 
-import pytest
-
 
 def test_layered_merge(tmp_path, monkeypatch):
     from dbbackup.config import load_config
@@ -24,8 +22,9 @@ def test_plaintext_warning(tmp_path, caplog):
 
 
 def test_tomllib_not_tomli_dep():
-    import dbbackup.config as mod
     import pathlib
+
+    import dbbackup.config as mod
 
     src = pathlib.Path(mod.__file__).read_text()
     assert "tomllib" in src

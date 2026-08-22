@@ -4,6 +4,7 @@ On POSIX: directories 0700, files 0600.
 On Windows: equivalent owner-only ACL via tempfile restricted inheritance
 (no literal 0600 guarantee — platform-appropriate).
 """
+
 from __future__ import annotations
 
 import os
@@ -11,6 +12,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from typing import Self
 
 
 class TempWorkdir:
@@ -27,7 +29,7 @@ class TempWorkdir:
             raise RuntimeError("TempWorkdir not entered")
         return self._path
 
-    def __enter__(self) -> TempWorkdir:
+    def __enter__(self) -> Self:
         if sys.platform != "win32":
             old_umask = os.umask(0o077)
             try:

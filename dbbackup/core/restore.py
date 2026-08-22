@@ -1,4 +1,5 @@
 """Restore orchestration: storage download -> gunzip -> adapter.restore() -> RestoreResult."""
+
 from __future__ import annotations
 
 import hashlib
@@ -7,7 +8,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dbbackup.adapters.registry import get_adapter
@@ -37,7 +38,9 @@ class RestoreResult:
                 object.__setattr__(self, "error", "***")
 
 
-def _verify_local(key: str, gz_stream: io.BytesIO, local_path: str | None, *, verify_requested: bool = False) -> None:
+def _verify_local(
+    key: str, gz_stream: io.BytesIO, local_path: str | None, *, verify_requested: bool = False
+) -> None:
     """If verify requested and local storage, check sha256 against sidecar.
 
     When verify_requested is True, missing/malformed sidecar or missing sha256
@@ -53,9 +56,13 @@ def _verify_local(key: str, gz_stream: io.BytesIO, local_path: str | None, *, ve
     try:
         from pathlib import Path as _P
 
-        alt = (_P(local_path).resolve() / key).with_suffix(_P(key).suffix + ".json") if "/" in key else None
+        (
+            (_P(local_path).resolve() / key).with_suffix(_P(key).suffix + ".json")
+            if "/" in key
+            else None
+        )
     except Exception:
-        alt = None
+        pass
     # simplest: key + .json under root
     meta = None
     last_err: Exception | None = None
@@ -70,8 +77,12 @@ def _verify_local(key: str, gz_stream: io.BytesIO, local_path: str | None, *, ve
     if meta is None:
         if verify_requested:
             if last_err is not None:
-                raise ValueError(f"verification failed: sidecar for {key!r} is malformed: {last_err}")
-            raise ValueError(f"verification failed: sidecar missing for {key!r} (expected {sidecar})")
+                raise ValueError(
+                    f"verification failed: sidecar for {key!r} is malformed: {last_err}"
+                )
+            raise ValueError(
+                f"verification failed: sidecar missing for {key!r} (expected {sidecar})"
+            )
         return
     if "sha256" not in meta:
         if verify_requested:
@@ -80,7 +91,9 @@ def _verify_local(key: str, gz_stream: io.BytesIO, local_path: str | None, *, ve
     # validate sha256 format
     sha_expected = str(meta["sha256"]).strip().lower()
     if len(sha_expected) != 64 or any(c not in "0123456789abcdef" for c in sha_expected):
-        raise ValueError(f"verification failed: sidecar for {key!r} has invalid sha256: {meta['sha256']!r}")
+        raise ValueError(
+            f"verification failed: sidecar for {key!r} has invalid sha256: {meta['sha256']!r}"
+        )
     pos = gz_stream.tell()
     gz_stream.seek(0)
     h = hashlib.sha256()
@@ -91,11 +104,13 @@ def _verify_local(key: str, gz_stream: io.BytesIO, local_path: str | None, *, ve
         h.update(chunk)
     gz_stream.seek(pos)
     if h.hexdigest() != sha_expected:
-        raise ValueError(f"sha256 mismatch for {key!r}: expected {sha_expected}, got {h.hexdigest()}")
+        raise ValueError(
+            f"sha256 mismatch for {key!r}: expected {sha_expected}, got {h.hexdigest()}"
+        )
 
 
 def run_restore(opts: RestoreOpts) -> RestoreResult:
-    start = datetime.now(timezone.utc)
+    start = datetime.now(UTC)
     t0 = time.monotonic()
     try:
         db_type = opts.connection.db_type
@@ -128,7 +143,7 @@ def run_restore(opts: RestoreOpts) -> RestoreResult:
             db_type=db_type, format="sql", extension=".sql.gz", stream_or_path=raw
         )
         adapter.restore(artifact, opts)
-        end = datetime.now(timezone.utc)
+        end = datetime.now(UTC)
         return RestoreResult(
             status="success",
             start_time=start,
@@ -136,7 +151,7 @@ def run_restore(opts: RestoreOpts) -> RestoreResult:
             duration_ms=int((time.monotonic() - t0) * 1000),
         )
     except KeyboardInterrupt as exc:
-        end = datetime.now(timezone.utc)
+        end = datetime.now(UTC)
         return RestoreResult(
             status="interrupted",
             error=redact(str(exc) or "interrupted"),
@@ -145,7 +160,7 @@ def run_restore(opts: RestoreOpts) -> RestoreResult:
             duration_ms=int((time.monotonic() - t0) * 1000),
         )
     except Exception as exc:
-        end = datetime.now(timezone.utc)
+        end = datetime.now(UTC)
         msg = redact(str(exc))
         log.error("restore failed: %s", msg)
         return RestoreResult(

@@ -2,13 +2,14 @@
 
 Full-only v1; extension point for incremental/differential reserved for v2.
 """
+
 from __future__ import annotations
 
 import io
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Self
 
 
 @dataclass
@@ -76,7 +77,7 @@ class BackupArtifact:
     extension: str  # e.g. ".sql.gz" suffix before S3 gzip (adapter-defined)
     stream_or_path: BinaryIO | str | Path | None = None
     size_hint: int | None = None
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: dict = field(default_factory=dict)
     needs_cleanup: bool = False
     _closed: bool = field(default=False, init=False, repr=False)
@@ -104,7 +105,7 @@ class BackupArtifact:
         except Exception:
             pass
 
-    def __enter__(self) -> BackupArtifact:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_args: object) -> None:

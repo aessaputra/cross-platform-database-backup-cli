@@ -2,9 +2,9 @@
 
 The ABC should not be instantiated directly; adapters inherit from it.
 """
+
 from __future__ import annotations
 
-from abc import ABC
 import pytest
 
 from dbbackup.adapters.base import DBAdapter
@@ -16,7 +16,6 @@ class DummyAdapter(DBAdapter):
 
     def test_connection(self, opts) -> None:
         """Test connection to the database."""
-        pass
 
     def backup(self, opts) -> BackupArtifact:
         """Create a backup artifact."""
@@ -29,7 +28,6 @@ class DummyAdapter(DBAdapter):
 
     def restore(self, artifact: BackupArtifact | bytes, opts) -> None:
         """Restore from artifact."""
-        pass
 
 
 def test_dbadapter_is_abstract() -> None:
@@ -47,7 +45,11 @@ def test_dbadapter_can_be_subclassed() -> None:
 def test_test_connection_exists() -> None:
     """test_connection method exists and can be called."""
     adapter = DummyAdapter()
-    opts = type("O", (), {"host": "localhost", "port": 5432, "user": "test", "password": "", "database": "testdb"})()
+    opts = type(
+        "O",
+        (),
+        {"host": "localhost", "port": 5432, "user": "test", "password": "", "database": "testdb"},
+    )()
     # Should not raise
     adapter.test_connection(opts)
 
@@ -55,7 +57,9 @@ def test_test_connection_exists() -> None:
 def test_backup_returns_artifact() -> None:
     """backup() returns a BackupArtifact with correct metadata."""
     adapter = DummyAdapter()
-    opts = type("O", (), {"database": "testdb", "host": "", "port": 0, "user": "", "password": ""})()
+    opts = type(
+        "O", (), {"database": "testdb", "host": "", "port": 0, "user": "", "password": ""}
+    )()
     artifact = adapter.backup(opts)
     assert isinstance(artifact, BackupArtifact)
     assert artifact.db_type == "dummy"
@@ -72,6 +76,10 @@ def test_restore_exists() -> None:
         extension=".dummy",
         stream_or_path=None,
     )
-    opts = type("O", (), {"host": "localhost", "port": 5432, "user": "test", "password": "", "database": "testdb"})()
+    opts = type(
+        "O",
+        (),
+        {"host": "localhost", "port": 5432, "user": "test", "password": "", "database": "testdb"},
+    )()
     # Should not raise
     adapter.restore(artifact, opts)

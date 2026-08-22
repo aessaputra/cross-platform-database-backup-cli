@@ -4,6 +4,7 @@ Layout: <root>/<db_type>/<database>-<timestamp><ext> + sidecar <artifact>.json
 Atomicity: same-dir tmp + fsync(file) + os.replace + fsync(dir) (best-effort Windows).
 Security: root jail via resolve/is_relative_to, sanitize database segment, 0700/0600 POSIX, fail-if-exists unless force.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -13,7 +14,7 @@ import logging
 import os
 import re
 import secrets
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path, PureWindowsPath
 from typing import BinaryIO
 
@@ -22,7 +23,10 @@ from dbbackup.storage.base import StorageBackend
 log = logging.getLogger(__name__)
 
 _WINDOWS_RESERVED = {
-    "con", "prn", "aux", "nul",
+    "con",
+    "prn",
+    "aux",
+    "nul",
     *(f"com{i}" for i in range(1, 10)),
     *(f"lpt{i}" for i in range(1, 10)),
 }
@@ -47,7 +51,9 @@ def sanitize_database(name: str) -> str:
 class LocalBackend(StorageBackend):
     """Local filesystem backend with atomic upload and traversal jail."""
 
-    def __init__(self, root: str | Path, *, create_parents: bool = True, force: bool = False) -> None:
+    def __init__(
+        self, root: str | Path, *, create_parents: bool = True, force: bool = False
+    ) -> None:
         p = Path(root)
         if not p.is_absolute():
             # resolve relative to cwd at construction time
@@ -64,7 +70,11 @@ class LocalBackend(StorageBackend):
             if self.root.exists() and os.name == "posix":
                 mode = self.root.stat().st_mode
                 if mode & 0o007:
-                    log.warning("local storage root %s is world-accessible (mode %o)", self.root, mode & 0o777)
+                    log.warning(
+                        "local storage root %s is world-accessible (mode %o)",
+                        self.root,
+                        mode & 0o777,
+                    )
         except Exception:
             pass
 
@@ -76,7 +86,8 @@ class LocalBackend(StorageBackend):
             raise ValueError(f"key must be relative, got absolute: {key!r}")
         # also reject Windows drive/UNC patterns that Path on Linux may not flag
         import re as _re
-        if _re.match(r"^[a-zA-Z]:[\\/]", key) or key.startswith("\\\\") or key.startswith("//"):
+
+        if _re.match(r"^[a-zA-Z]:[\\/]", key) or key.startswith(("\\\\", "//")):
             raise ValueError(f"key must be relative, got absolute: {key!r}")
         dest = (self.root / key).resolve()
         # jail check
@@ -128,7 +139,6 @@ class LocalBackend(StorageBackend):
         tmp = dest.parent / tmp_name
         stream = None
         # flag to track if tmp was created (os.open path)
-        tmp_created = False
         f = None
         try:
             # obtain source stream from artifact
@@ -153,11 +163,9 @@ class LocalBackend(StorageBackend):
             # open tmp with restricted perms
             if os.name == "posix":
                 fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                tmp_created = True
                 f = os.fdopen(fd, "wb")
             else:
                 f = open(tmp, "wb")
-                tmp_created = True
             try:
                 # stream copy
                 while True:
@@ -201,36 +209,51 @@ class LocalBackend(StorageBackend):
                     except Exception:
                         pass
                 except FileExistsError:
-                    raise FileExistsError(f"destination already exists: {dest} (use --force to overwrite)")
+                    raise FileExistsError(
+                        f"destination already exists: {dest} (use --force to overwrite)"
+                    )
                 except OSError as e:
                     # EXDEV or other: fallback to O_EXCL create
                     import errno
+
                     if e.errno == errno.EEXIST:
-                        raise FileExistsError(f"destination already exists: {dest} (use --force to overwrite)")
+                        raise FileExistsError(
+                            f"destination already exists: {dest} (use --force to overwrite)"
+                        )
                     # EXDEV: copy via O_EXCL
                     if e.errno == errno.EXDEV:
                         try:
                             fd2 = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                             try:
-                                with open(tmp, "rb") as rf, os.fdopen(fd2, "wb", closefd=True) as wf:
+                                with (
+                                    open(tmp, "rb") as rf,
+                                    os.fdopen(fd2, "wb", closefd=True) as wf,
+                                ):
                                     import shutil
+
                                     shutil.copyfileobj(rf, wf)
                             except FileExistsError:
                                 raise
                             except OSError as e2:
                                 if e2.errno == errno.EEXIST:
-                                    raise FileExistsError(f"destination already exists: {dest} (use --force to overwrite)")
+                                    raise FileExistsError(
+                                        f"destination already exists: {dest} (use --force to overwrite)"
+                                    )
                                 raise
                             tmp.unlink(missing_ok=True)
                         except FileExistsError:
                             raise
                         except OSError:
                             # last resort: if we cannot link/copy atomically, fail closed rather than overwrite
-                            raise FileExistsError(f"destination already exists or cannot be created atomically: {dest}")
+                            raise FileExistsError(
+                                f"destination already exists or cannot be created atomically: {dest}"
+                            )
                     else:
                         # fallback to replace only if dest didn't exist at link time but now does
                         if dest.exists():
-                            raise FileExistsError(f"destination already exists: {dest} (use --force to overwrite)")
+                            raise FileExistsError(
+                                f"destination already exists: {dest} (use --force to overwrite)"
+                            )
                         os.replace(tmp, dest)
             else:
                 os.replace(tmp, dest)
@@ -263,7 +286,7 @@ class LocalBackend(StorageBackend):
                 "extension": getattr(artifact, "extension", ""),
                 "bytes": dest.stat().st_size,
                 "sha256": sha256.hexdigest(),
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
             }
             # enrich from artifact.metadata if present
             try:
@@ -305,7 +328,7 @@ class LocalBackend(StorageBackend):
 
     def download(self, key: str) -> BinaryIO:
         """Download key and return readable stream positioned at start.
-        
+
         Rejects traversal and symlink-outside-root. Validates existence.
         """
         dest = self._resolve_key(key)

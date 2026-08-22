@@ -25,7 +25,7 @@ import logging
 import signal
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -37,7 +37,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from dbbackup.core.backup import run_backup
 from dbbackup.core.redact import redact
-from dbbackup.models import BackupOpts, ConnectionOpts, BackupResult
+from dbbackup.models import BackupOpts, BackupResult, ConnectionOpts
 
 log = logging.getLogger(__name__)
 
@@ -109,7 +109,8 @@ def _make_job_runner(job_id: str, opts_factory, daemon_ref: dict | None = None):
             with _local:
                 if _active["count"] != 0:
                     log.warning(
-                        "job %s missed trigger — previous run still active, skipped per max_instances=1", job_id
+                        "job %s missed trigger — previous run still active, skipped per max_instances=1",
+                        job_id,
                     )
                     return None
                 _active["count"] = 1
@@ -118,36 +119,37 @@ def _make_job_runner(job_id: str, opts_factory, daemon_ref: dict | None = None):
             # Overlap guard: skip if already running
             if _active["count"] != 0:
                 log.warning(
-                    "job %s missed trigger — previous run still active, skipped per max_instances=1", job_id
+                    "job %s missed trigger — previous run still active, skipped per max_instances=1",
+                    job_id,
                 )
                 return None
             with _local:
                 if _active["count"] != 0:
                     log.warning(
-                        "job %s missed trigger — previous run still active, skipped per max_instances=1", job_id
+                        "job %s missed trigger — previous run still active, skipped per max_instances=1",
+                        job_id,
                     )
                     return None
                 _active["count"] = 1
         try:
-            start = datetime.now(timezone.utc)
+            start = datetime.now(UTC)
             t0 = time.monotonic()
             try:
                 result = run_backup(opts_factory())
                 if result is None:
                     result = BackupResult(
-                        status="failed", error="run_backup returned None",
+                        status="failed",
+                        error="run_backup returned None",
                         db_type=opts_factory().connection.db_type,
                         database=opts_factory().connection.database,
                     )
                 if result.status == "failed":
-                    log.error(
-                        "job %s failed: %s", job_id, redact(result.error or "unknown error")
-                    )
+                    log.error("job %s failed: %s", job_id, redact(result.error or "unknown error"))
                 else:
                     log.info("job %s completed: %s", job_id, result.status)
                 return result
             except Exception as exc:  # never propagate out of the executor thread
-                end = datetime.now(timezone.utc)
+                end = datetime.now(UTC)
                 msg = redact(str(exc))
                 log.error("job %s raised: %s", job_id, msg)
                 return BackupResult(
@@ -220,9 +222,7 @@ class SchedulerDaemon:
             wait = True
         if wait:
             # Bound the wait by the configured grace period.
-            timer = threading.Timer(
-                self.shutdown_grace_seconds, self._abort_if_still_running
-            )
+            timer = threading.Timer(self.shutdown_grace_seconds, self._abort_if_still_running)
             timer.daemon = True
             timer.start()
             self.scheduler.shutdown(wait=True)
@@ -318,7 +318,8 @@ def start_scheduler(config: dict[str, Any]) -> SchedulerDaemon:
     schedule_cfg = config.get("schedule") or {}
     jobs = schedule_cfg.get("jobs") or []
     shutdown_grace_seconds = int(
-        schedule_cfg.get("shutdown_grace_seconds", DEFAULT_SHUTDOWN_GRACE_SECONDS) or DEFAULT_SHUTDOWN_GRACE_SECONDS
+        schedule_cfg.get("shutdown_grace_seconds", DEFAULT_SHUTDOWN_GRACE_SECONDS)
+        or DEFAULT_SHUTDOWN_GRACE_SECONDS
     )
 
     jobstores: dict[str, BaseJobStore] = {"default": MemoryJobStore()}
@@ -350,7 +351,9 @@ def start_scheduler(config: dict[str, Any]) -> SchedulerDaemon:
                 if lp:
                     job = {**job, "local_path": lp}
         opts = _job_to_opts(job)
-        runner = _make_job_runner(job_id, lambda o=opts: o, daemon_ref=None)  # wire after daemon creation
+        runner = _make_job_runner(
+            job_id, lambda o=opts: o, daemon_ref=None
+        )  # wire after daemon creation
         scheduler.add_job(
             runner,
             trigger=trigger,
@@ -372,7 +375,11 @@ def start_scheduler(config: dict[str, Any]) -> SchedulerDaemon:
             g = config.get("storage") if isinstance(config.get("storage"), dict) else {}
             gt = str(g.get("type", "")) if isinstance(g, dict) else ""
             tmp_cfg = dict(cfg)
-            if not tmp_cfg.get("storage") and not tmp_cfg.get("storage_type") and gt.lower() in ("s3", "local"):
+            if (
+                not tmp_cfg.get("storage")
+                and not tmp_cfg.get("storage_type")
+                and gt.lower() in ("s3", "local")
+            ):
                 tmp_cfg["storage"] = gt.lower()
             if (tmp_cfg.get("storage") or gt.lower()) == "local" and not tmp_cfg.get("local_path"):
                 lp = None

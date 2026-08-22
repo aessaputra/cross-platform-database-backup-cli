@@ -1,5 +1,6 @@
 """Notify tests — Slack opt-in, https only, timeout 5s non-blocking."""
-from unittest.mock import patch, MagicMock
+
+from unittest.mock import MagicMock, patch
 
 
 def test_slack_not_sent_when_not_configured(monkeypatch):

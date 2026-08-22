@@ -76,35 +76,62 @@ def load_config(cli_args: dict | None = None, *, project_toml: str | Path | None
     for src_name, src_data in [("user", user_data), ("project", proj_data)]:
         conn = src_data.get("connection", {}) if isinstance(src_data, dict) else {}
         if isinstance(conn, dict) and "password" in conn and conn.get("password"):
-            allow = proj_data.get("allow_plaintext_password") or user_data.get("allow_plaintext_password")
+            allow = proj_data.get("allow_plaintext_password") or user_data.get(
+                "allow_plaintext_password"
+            )
             # also check flat key
             if not allow:
                 # check nested connection.allow_plaintext_password
                 allow = conn.get("allow_plaintext_password")
             if not allow:
-                log.warning("plaintext password in %s TOML — set allow_plaintext_password=true to suppress; prefer env/secret mechanisms", src_name)
+                log.warning(
+                    "plaintext password in %s TOML — set allow_plaintext_password=true to suppress; prefer env/secret mechanisms",
+                    src_name,
+                )
 
     merged.update(proj_data.get("connection", {}))
-    merged.update({k: v for k, v in proj_data.items() if k not in ("connection", "s3", "storage", "allow_plaintext_password")})
+    merged.update(
+        {
+            k: v
+            for k, v in proj_data.items()
+            if k not in ("connection", "s3", "storage", "allow_plaintext_password")
+        }
+    )
     # storage block: [storage] type, [storage.local] path
     _storage = proj_data.get("storage", {}) if isinstance(proj_data.get("storage"), dict) else {}
     if isinstance(_storage, dict):
         if "type" in _storage:
             merged["storage_type"] = str(_storage["type"]).lower()
         # also honour per-user storage block if not overwritten by project
-        if "local" in _storage and isinstance(_storage["local"], dict) and "path" in _storage["local"]:
+        if (
+            "local" in _storage
+            and isinstance(_storage["local"], dict)
+            and "path" in _storage["local"]
+        ):
             merged["local_path"] = str(_storage["local"]["path"])
     # user-level storage fallback if not set by project
     _u_storage = user_data.get("storage", {}) if isinstance(user_data.get("storage"), dict) else {}
-    if isinstance(_u_storage, dict) and "storage_type" not in merged:
-        if "type" in _u_storage:
-            merged["storage_type"] = str(_u_storage["type"]).lower()
-    if isinstance(_u_storage, dict) and "local_path" not in merged:
-        if "local" in _u_storage and isinstance(_u_storage["local"], dict) and "path" in _u_storage["local"]:
-            merged["local_path"] = str(_u_storage["local"]["path"])
+    if isinstance(_u_storage, dict) and "storage_type" not in merged and "type" in _u_storage:
+        merged["storage_type"] = str(_u_storage["type"]).lower()
+    if (
+        isinstance(_u_storage, dict)
+        and "local_path" not in merged
+        and (
+            "local" in _u_storage
+            and isinstance(_u_storage["local"], dict)
+            and "path" in _u_storage["local"]
+        )
+    ):
+        merged["local_path"] = str(_u_storage["local"]["path"])
 
     # 3. env DBBACKUP_*
-    for env_key, cfg_key in [("DBBACKUP_DATABASE", "database"), ("DBBACKUP_HOST", "host"), ("DBBACKUP_PORT", "port"), ("DBBACKUP_STORAGE_TYPE", "storage_type"), ("DBBACKUP_LOCAL_PATH", "local_path")]:
+    for env_key, cfg_key in [
+        ("DBBACKUP_DATABASE", "database"),
+        ("DBBACKUP_HOST", "host"),
+        ("DBBACKUP_PORT", "port"),
+        ("DBBACKUP_STORAGE_TYPE", "storage_type"),
+        ("DBBACKUP_LOCAL_PATH", "local_path"),
+    ]:
         if env_key in os.environ:
             merged[cfg_key] = os.environ[env_key]
             if cfg_key == "port":

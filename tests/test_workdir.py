@@ -14,7 +14,7 @@ def test_workdir_creates_and_cleans():
     assert not wd.path.exists()
 
 
-def test_workdir_owner_restricted_posix(tmp_path=None):  # noqa: ARG001
+def test_workdir_owner_restricted_posix(tmp_path=None):
     import sys
 
     with TempWorkdir() as wd:

@@ -2,6 +2,7 @@
 
 Happy path, failure paths, traversal, permissions, factory.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -17,8 +18,12 @@ from dbbackup.models import BackupArtifact, BackupOpts, ConnectionOpts, RestoreO
 from dbbackup.storage.local import LocalBackend, sanitize_database
 
 
-def _artifact(data: bytes = b"hello", db_type: str = "postgres", ext: str = ".sql.gz") -> BackupArtifact:
-    return BackupArtifact(db_type=db_type, format="sql", extension=ext, stream_or_path=io.BytesIO(data))
+def _artifact(
+    data: bytes = b"hello", db_type: str = "postgres", ext: str = ".sql.gz"
+) -> BackupArtifact:
+    return BackupArtifact(
+        db_type=db_type, format="sql", extension=ext, stream_or_path=io.BytesIO(data)
+    )
 
 
 def test_sanitize_database():
@@ -69,7 +74,9 @@ def test_upload_with_stream_or_path_path(tmp_path: Path):
     # str path
     src2 = tmp_path / "src2.bin"
     src2.write_bytes(b"from-str")
-    art2 = BackupArtifact(db_type="postgres", format="sql", extension=".sql.gz", stream_or_path=str(src2))
+    art2 = BackupArtifact(
+        db_type="postgres", format="sql", extension=".sql.gz", stream_or_path=str(src2)
+    )
     backend.upload(art2, "postgres/b.sql.gz")
     assert (tmp_path / "postgres/b.sql.gz").read_bytes() == b"from-str"
 
@@ -83,7 +90,9 @@ def test_upload_with_raw_readable(tmp_path: Path):
 
 def test_upload_empty_artifact(tmp_path: Path):
     backend = LocalBackend(root=tmp_path)
-    empty = BackupArtifact(db_type="postgres", format="sql", extension=".sql.gz", stream_or_path=None)
+    empty = BackupArtifact(
+        db_type="postgres", format="sql", extension=".sql.gz", stream_or_path=None
+    )
     backend.upload(empty, "postgres/empty.sql.gz")
     assert (tmp_path / "postgres/empty.sql.gz").read_bytes() == b""
     # explicit None via stream_or_path branch with None value
@@ -95,7 +104,13 @@ def test_upload_empty_artifact(tmp_path: Path):
 
 def test_upload_with_metadata_enrichment(tmp_path: Path):
     backend = LocalBackend(root=tmp_path)
-    art = BackupArtifact(db_type="postgres", format="sql", extension=".sql.gz", stream_or_path=io.BytesIO(b"x"), metadata={"custom": "val"})
+    art = BackupArtifact(
+        db_type="postgres",
+        format="sql",
+        extension=".sql.gz",
+        stream_or_path=io.BytesIO(b"x"),
+        metadata={"custom": "val"},
+    )
     backend.upload(art, "postgres/meta.sql.gz")
     meta = json.loads((tmp_path / "postgres/meta.sql.gz.json").read_text())
     assert meta["custom"] == "val"
@@ -118,14 +133,20 @@ def test_upload_fail_if_exists(tmp_path: Path):
 
 def test_upload_no_partial_on_failure(tmp_path: Path, monkeypatch):
     backend = LocalBackend(root=tmp_path)
-    art = _artifact(b"hello")
+    _artifact(b"hello")
     key = "postgres/mydb-20260822T120000Z.sql.gz"
+
     # Simulate ENOSPC: stream that raises OSError during read after first chunk
     class FailingStream(io.BytesIO):
         def read(self, n=-1):
             raise OSError(28, "No space left on device")
 
-    failing_art = BackupArtifact(db_type="postgres", format="sql", extension=".sql.gz", stream_or_path=FailingStream(b"hello"))
+    failing_art = BackupArtifact(
+        db_type="postgres",
+        format="sql",
+        extension=".sql.gz",
+        stream_or_path=FailingStream(b"hello"),
+    )
     with pytest.raises(OSError):
         backend.upload(failing_art, key)
     assert not (tmp_path / key).exists()
@@ -151,10 +172,11 @@ def test_upload_world_readable_warning(tmp_path: Path, caplog):
     root = tmp_path / "world"
     root.mkdir()
     root.chmod(0o777)
-    backend = LocalBackend(root=root)
+    LocalBackend(root=root)
     # warning should have been logged on init — but caplog may have missed due to import time
     # trigger by creating new instance with caplog
     import logging
+
     with caplog.at_level(logging.WARNING):
         LocalBackend(root=root)
     # at least one warning about world-accessible
@@ -248,10 +270,16 @@ def test_symlink_outside_root_rejected(tmp_path: Path):
 def test_factory_local_and_s3(tmp_path: Path):
     from dbbackup.storage import get_storage_backend
 
-    opts_local = BackupOpts(connection=ConnectionOpts(db_type="postgres"), storage_type="local", local_path=str(tmp_path))
+    opts_local = BackupOpts(
+        connection=ConnectionOpts(db_type="postgres"),
+        storage_type="local",
+        local_path=str(tmp_path),
+    )
     backend = get_storage_backend(opts_local)
     assert isinstance(backend, LocalBackend)
-    opts_s3 = BackupOpts(connection=ConnectionOpts(db_type="postgres"), storage_type="s3", s3_bucket="bkt")
+    opts_s3 = BackupOpts(
+        connection=ConnectionOpts(db_type="postgres"), storage_type="s3", s3_bucket="bkt"
+    )
     from dbbackup.storage.s3 import S3Backend
 
     backend2 = get_storage_backend(opts_s3)
@@ -264,7 +292,9 @@ def test_factory_relative_local_path_resolved(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     rel = Path("rel2")
     rel.mkdir()
-    opts = BackupOpts(connection=ConnectionOpts(db_type="postgres"), storage_type="local", local_path="rel2")
+    opts = BackupOpts(
+        connection=ConnectionOpts(db_type="postgres"), storage_type="local", local_path="rel2"
+    )
     backend = get_storage_backend(opts)
     assert backend.root.is_absolute()
 
@@ -272,25 +302,43 @@ def test_factory_relative_local_path_resolved(tmp_path: Path, monkeypatch):
 def test_factory_missing_local_path_raises():
     from dbbackup.storage import get_storage_backend
 
-    opts = BackupOpts(connection=ConnectionOpts(db_type="postgres"), storage_type="local", local_path=None)
+    opts = BackupOpts(
+        connection=ConnectionOpts(db_type="postgres"), storage_type="local", local_path=None
+    )
     with pytest.raises(ValueError):
         get_storage_backend(opts)
 
 
 def test_cli_backup_local_integration(tmp_path: Path):
     from typer.testing import CliRunner
+
     from dbbackup.cli import app
 
     runner = CliRunner()
     # Mock adapter and avoid real S3
     with patch("dbbackup.core.backup.get_adapter") as ga:
         m = MagicMock()
-        art = BackupArtifact(db_type="postgres", format="sql", extension=".sql.gz", stream_or_path=io.BytesIO(b"select 1"))
+        art = BackupArtifact(
+            db_type="postgres",
+            format="sql",
+            extension=".sql.gz",
+            stream_or_path=io.BytesIO(b"select 1"),
+        )
         m.backup.return_value = art
         ga.return_value = m
         result = runner.invoke(
             app,
-            ["backup", "--db", "postgres", "--database", "mydb", "--storage", "local", "--local-path", str(tmp_path)],
+            [
+                "backup",
+                "--db",
+                "postgres",
+                "--database",
+                "mydb",
+                "--storage",
+                "local",
+                "--local-path",
+                str(tmp_path),
+            ],
         )
         assert result.exit_code == 0, result.output
         # file should exist under tmp_path/postgres/mydb-*.sql.gz
@@ -303,27 +351,44 @@ def test_cli_backup_local_integration(tmp_path: Path):
             ga2.return_value = m2
             r2 = runner.invoke(
                 app,
-                ["restore", "--db", "postgres", "--key", key, "--storage", "local", "--local-path", str(tmp_path), "--verify"],
+                [
+                    "restore",
+                    "--db",
+                    "postgres",
+                    "--key",
+                    key,
+                    "--storage",
+                    "local",
+                    "--local-path",
+                    str(tmp_path),
+                    "--verify",
+                ],
             )
             assert r2.exit_code == 0, r2.output
 
 
 def test_cli_backup_missing_local_path(tmp_path: Path):
     from typer.testing import CliRunner
+
     from dbbackup.cli import app
 
     runner = CliRunner()
-    result = runner.invoke(app, ["backup", "--db", "postgres", "--database", "mydb", "--storage", "local"])
+    result = runner.invoke(
+        app, ["backup", "--db", "postgres", "--database", "mydb", "--storage", "local"]
+    )
     assert result.exit_code == 10
     assert "local-path" in result.output.lower()
 
 
 def test_cli_restore_requires_key(tmp_path: Path):
     from typer.testing import CliRunner
+
     from dbbackup.cli import app
 
     runner = CliRunner()
-    result = runner.invoke(app, ["restore", "--db", "postgres", "--storage", "local", "--local-path", str(tmp_path)])
+    result = runner.invoke(
+        app, ["restore", "--db", "postgres", "--storage", "local", "--local-path", str(tmp_path)]
+    )
     assert result.exit_code == 10
 
 

@@ -1,7 +1,6 @@
 """Task 7 TDD: backup orchestration failure -> BackupResult(status=failed) with redact, abort."""
-from unittest.mock import MagicMock, patch
 
-import pytest
+from unittest.mock import MagicMock, patch
 
 from dbbackup.models import BackupOpts, ConnectionOpts
 
@@ -27,11 +26,14 @@ def test_backup_failure_emits_failed_result():
 
 
 def test_backup_aborts_on_storage_failure():
-    from dbbackup.core.backup import run_backup
-    from dbbackup.models import BackupArtifact
     import io
 
-    art = BackupArtifact(db_type="mysql", format="sql", extension=".sql.gz", stream_or_path=io.BytesIO(b"hello"))
+    from dbbackup.core.backup import run_backup
+    from dbbackup.models import BackupArtifact
+
+    art = BackupArtifact(
+        db_type="mysql", format="sql", extension=".sql.gz", stream_or_path=io.BytesIO(b"hello")
+    )
     with patch("dbbackup.core.backup.get_adapter") as ga:
         m = MagicMock()
         m.backup.return_value = art
@@ -45,11 +47,14 @@ def test_backup_aborts_on_storage_failure():
 
 
 def test_backup_success_gzip_and_key():
-    from dbbackup.core.backup import run_backup
-    from dbbackup.models import BackupArtifact
     import io
 
-    art = BackupArtifact(db_type="mysql", format="sql", extension=".sql.gz", stream_or_path=io.BytesIO(b"hello"))
+    from dbbackup.core.backup import run_backup
+    from dbbackup.models import BackupArtifact
+
+    art = BackupArtifact(
+        db_type="mysql", format="sql", extension=".sql.gz", stream_or_path=io.BytesIO(b"hello")
+    )
     with patch("dbbackup.core.backup.get_adapter") as ga:
         m = MagicMock()
         m.backup.return_value = art

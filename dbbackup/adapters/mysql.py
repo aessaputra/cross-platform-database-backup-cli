@@ -1,16 +1,16 @@
 """MySQL adapter — mysqldump streaming via subprocess.Popen."""
+
 from __future__ import annotations
 
-import shutil
 import subprocess
-from typing import BinaryIO, Union
+from typing import BinaryIO
 
 from dbbackup.adapters._helpers import BinaryNotFoundError, require_binary
 from dbbackup.adapters.base import DBAdapter
 from dbbackup.models import BackupArtifact
 
 # Re-export BinaryNotFoundError for tests that mock require_binary
-__all__ = ["MySQLAdapter", "BinaryNotFoundError"]
+__all__ = ["BinaryNotFoundError", "MySQLAdapter"]
 
 
 class MySQLAdapter(DBAdapter):
@@ -28,7 +28,6 @@ class MySQLAdapter(DBAdapter):
         # Lightweight connectivity check — no dump. Binary presence is the gating check;
         # real auth is validated during backup. Do not run mysqladmin to avoid extra dep.
         # Success if binary exists; failure only on missing binary.
-        return None
 
     def backup(self, opts) -> BackupArtifact:  # type: ignore[override]
         bin_path = self._check_binary()
@@ -46,7 +45,7 @@ class MySQLAdapter(DBAdapter):
             cmd.append(f"-p{password}")
         if database:
             cmd.append(database)
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)  # noqa: S603
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert proc.stdout is not None
         return BackupArtifact(
             db_type="mysql",
@@ -56,12 +55,12 @@ class MySQLAdapter(DBAdapter):
             size_hint=None,
         )
 
-    def restore(self, artifact: "BackupArtifact | BinaryIO", opts: Union["object", object]) -> None:  # type: ignore[override]
+    def restore(self, artifact: BackupArtifact | BinaryIO, opts: object) -> None:  # type: ignore[override]
         bin_path = require_binary(self.restore_binary)
         # Resolve target database from RestoreOpts
         target = getattr(opts, "target_database", None)
         if target is None and hasattr(opts, "connection"):
-            target = getattr(getattr(opts, "connection"), "database", None)
+            target = getattr(opts.connection, "database", None)
         if target is None:
             target = getattr(opts, "database", None)
         # Stream artifact into mysql subprocess stdin (minimal impl for registry completeness)
@@ -70,7 +69,9 @@ class MySQLAdapter(DBAdapter):
         cmd = [bin_path, f"-h{host}"]
         if target:
             cmd.append(str(target))
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)  # noqa: S603
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
         assert proc.stdin is not None
         import shutil as _shutil
 

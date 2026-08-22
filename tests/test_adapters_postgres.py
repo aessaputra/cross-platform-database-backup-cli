@@ -1,4 +1,5 @@
 """Tests for Postgres streaming adapter."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -9,19 +10,17 @@ import pytest
 def test_postgres_missing_binary_raises():
     from dbbackup.adapters.postgres import PostgresAdapter
 
-    with patch("shutil.which", return_value=None):
-        with pytest.raises(Exception, match="pg_dump"):
-            PostgresAdapter().test_connection(MagicMock())
+    with patch("shutil.which", return_value=None), pytest.raises(Exception, match="pg_dump"):
+        PostgresAdapter().test_connection(MagicMock())
 
 
 def test_postgres_backup_missing_binary_raises():
     from dbbackup.adapters.postgres import PostgresAdapter
 
-    with patch("shutil.which", return_value=None):
-        with pytest.raises(Exception, match="pg_dump"):
-            PostgresAdapter().backup(
-                MagicMock(host="h", user="u", password="p", database="db", port=5432)
-            )
+    with patch("shutil.which", return_value=None), pytest.raises(Exception, match="pg_dump"):
+        PostgresAdapter().backup(
+            MagicMock(host="h", user="u", password="p", database="db", port=5432)
+        )
 
 
 def test_postgres_backup_streams():

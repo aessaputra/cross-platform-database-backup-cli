@@ -5,14 +5,13 @@ Applied before console, file log, BackupResult.error, and Slack payload.
 Covers: DB passwords (password=/passwd=/pwd=), DB URL credentials,
 Slack webhook URLs, S3 tokens/keys.
 """
+
 from __future__ import annotations
 
 import re
 
 # password / passwd / pwd key=value
-_RE_PASSWORD_KV = re.compile(
-    r"(?i)(password|passwd|pwd)(\s*[:=]\s*)([^\s\"'`,;]+)"
-)
+_RE_PASSWORD_KV = re.compile(r"(?i)(password|passwd|pwd)(\s*[:=]\s*)([^\s\"'`,;]+)")
 
 # S3 / generic token key=value  (aws_secret_access_key, secret_access_key, access_key, token)
 _RE_TOKEN_KV = re.compile(
@@ -20,9 +19,7 @@ _RE_TOKEN_KV = re.compile(
 )
 
 # DB URL credentials: scheme://user:password@  -> redact password part
-_RE_URL_CREDS = re.compile(
-    r"(\w+://[^/\s:]+:)([^@\s/]+)(@)"
-)
+_RE_URL_CREDS = re.compile(r"(\w+://[^/\s:]+:)([^@\s/]+)(@)")
 
 # Slack webhook URLs
 _RE_SLACK_WEBHOOK = re.compile(

@@ -4,6 +4,7 @@ V1: S3 only. Local Filesystem Storage feature adds LocalBackend as second
 backend. list/delete/exists remain out of scope until retention/listing
 features exist — added together for both backends.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

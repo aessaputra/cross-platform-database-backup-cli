@@ -7,12 +7,13 @@ left to the caller that consumes ``BackupArtifact.open_stream()``. The per-
 adapter extension declares ``.sqlite.gz``, so the S3 key carries the right
 suffix before the orchestrator's gzip step (see models/design spec).
 """
+
 from __future__ import annotations
 
 import sqlite3
 import tempfile
 from pathlib import Path
-from typing import BinaryIO, Union
+from typing import BinaryIO
 
 from dbbackup.adapters.base import DBAdapter
 from dbbackup.models import BackupArtifact, RestoreOpts
@@ -34,9 +35,7 @@ class SQLiteAdapter(DBAdapter):
     def test_connection(self, opts) -> None:  # type: ignore[override]
         database = getattr(opts, "database", None)
         if not database:
-            raise ValueError(
-                "sqlite --database is required (path to .db/.sqlite file)"
-            )
+            raise ValueError("sqlite --database is required (path to .db/.sqlite file)")
         db_path = Path(str(database))
         if not db_path.exists():
             raise ValueError(f"sqlite database not found: {db_path}")
@@ -49,18 +48,14 @@ class SQLiteAdapter(DBAdapter):
             try:
                 conn.execute("select 1")
             except sqlite3.Error as exc:
-                raise ConnectionError(
-                    f"sqlite connection test failed for {db_path}"
-                ) from exc
+                raise ConnectionError(f"sqlite connection test failed for {db_path}") from exc
         finally:
             conn.close()
 
     def backup(self, opts) -> BackupArtifact:  # type: ignore[override]
         database = getattr(opts, "database", None)
         if not database:
-            raise ValueError(
-                "sqlite --database is required (path to .db/.sqlite file)"
-            )
+            raise ValueError("sqlite --database is required (path to .db/.sqlite file)")
         db_path = Path(str(database))
         if not db_path.exists():
             raise FileNotFoundError(f"sqlite database not found: {db_path}")
@@ -113,13 +108,13 @@ class SQLiteAdapter(DBAdapter):
 
     def restore(
         self,
-        artifact: "BackupArtifact | BinaryIO",
-        opts: Union["RestoreOpts", object],
+        artifact: BackupArtifact | BinaryIO,
+        opts: RestoreOpts | object,
     ) -> None:  # type: ignore[override]
         # Resolve target database path
         target = None
         if hasattr(opts, "connection"):
-            target = getattr(getattr(opts, "connection"), "database", None)  # type: ignore[union-attr]
+            target = getattr(opts.connection, "database", None)  # type: ignore[union-attr]
         if target is None:
             target = getattr(opts, "database", None)
         if not target:
@@ -142,7 +137,7 @@ class SQLiteAdapter(DBAdapter):
                     pass
 
     def _resolve_artifact_source(
-        self, artifact: "BackupArtifact | BinaryIO"
+        self, artifact: BackupArtifact | BinaryIO
     ) -> tuple[BinaryIO, BinaryIO | None]:
         # Returns (readable BinaryIO, optional stream to close after)
         if hasattr(artifact, "stream_or_path") and hasattr(artifact, "open_stream"):
@@ -158,12 +153,10 @@ class SQLiteAdapter(DBAdapter):
         # Use a temp file so replacement is atomic: dump src bytes to temp,
         # then validate as sqlite DB, then replace dest.
         import os
-        import sys
         import shutil
+        import sys
 
-        fd, tmp_name = tempfile.mkstemp(
-            prefix="dbbackup-sqlite-restore-", suffix=".sqlite"
-        )
+        fd, tmp_name = tempfile.mkstemp(prefix="dbbackup-sqlite-restore-", suffix=".sqlite")
         os.close(fd)
         tmp = Path(tmp_name)
         if sys.platform != "win32":

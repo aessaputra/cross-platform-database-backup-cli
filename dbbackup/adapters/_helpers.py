@@ -1,4 +1,5 @@
 """Shared helpers for streaming adapters."""
+
 from __future__ import annotations
 
 import shutil

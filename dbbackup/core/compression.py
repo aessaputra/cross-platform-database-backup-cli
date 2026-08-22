@@ -1,8 +1,8 @@
 """Streaming gzip compression helpers (level 1-9)."""
+
 from __future__ import annotations
 
 import gzip
-import io
 import shutil
 from typing import BinaryIO
 
