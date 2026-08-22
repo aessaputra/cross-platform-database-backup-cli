@@ -1,6 +1,7 @@
-"""StorageBackend ABC — minimal upload + download only (v1).
+"""StorageBackend ABC — minimal upload + download only (v1.x).
 
-list/delete excluded in v1 per spec §1.5 / Task 4.
+V1: S3 only. V1.x: S3 + local. list/delete/exists remain out of scope
+until retention/listing features exist — added together for both backends.
 """
 from __future__ import annotations
 

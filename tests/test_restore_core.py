@@ -20,7 +20,7 @@ def test_restore_failure_status_failed():
         m = MagicMock()
         m.restore.side_effect = Exception("restore boom password=s3cret")
         ga.return_value = m
-        with patch("dbbackup.core.restore.S3Backend") as sb_cls:
+        with patch("dbbackup.core.restore.get_storage_backend") as sb_cls:
             sb = MagicMock()
             sb.download.return_value = __import__("io").BytesIO(b"gz")
             sb_cls.return_value = sb
@@ -51,7 +51,7 @@ def test_restore_selective_table_passes_through():
     with patch("dbbackup.core.restore.get_adapter") as ga:
         m = MagicMock()
         ga.return_value = m
-        with patch("dbbackup.core.restore.S3Backend") as sb_cls:
+        with patch("dbbackup.core.restore.get_storage_backend") as sb_cls:
             sb = MagicMock()
             sb.download.return_value = buf
             sb_cls.return_value = sb

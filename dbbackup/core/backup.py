@@ -1,18 +1,52 @@
-"""Backup orchestration: adapter -> gzip streaming -> S3 upload -> BackupResult."""
+"""Backup orchestration: adapter -> gzip streaming -> storage upload -> BackupResult."""
 from __future__ import annotations
 
 import io
 import logging
+import re
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from dbbackup.adapters.registry import get_adapter
 from dbbackup.core.compression import compress_stream
 from dbbackup.core.redact import redact
 from dbbackup.models import BackupOpts, BackupResult
-from dbbackup.storage.s3 import S3Backend
+from dbbackup.storage import get_storage_backend
 
 log = logging.getLogger(__name__)
+
+_WINDOWS_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
+_SAN_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _sanitize_db(name: str) -> str:
+    if not name:
+        return "unknown"
+    s = _SAN_RE.sub("_", name).strip("._")
+    if not s:
+        return "unknown"
+    if s.lower() in _WINDOWS_RESERVED:
+        s = f"_{s}"
+    return s.rstrip(". ") or "unknown"
+
+
+def _build_key(opts: BackupOpts, artifact) -> str:
+    """Build storage key.
+
+    S3: <prefix>/<db_type>/<database>-<timestamp><ext>  (prefix optional)
+    Local: <db_type>/<database>-<timestamp><ext>  (prefix ignored for local; root is prefix)
+    Database segment sanitized.
+    """
+    ext = artifact.extension or ".dump"
+    db_type = opts.connection.db_type or "unknown"
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    safe_db = _sanitize_db(opts.connection.database or "unknown")
+    key_suffix = f"{safe_db}-{ts}{ext}"
+    if opts.storage_type == "local":
+        return f"{db_type}/{key_suffix}"
+    prefix = (opts.s3_prefix or "").strip("/")
+    return f"{prefix}/{db_type}/{key_suffix}" if prefix else f"{db_type}/{key_suffix}"
 
 
 def run_backup(opts: BackupOpts) -> BackupResult:
@@ -26,27 +60,25 @@ def run_backup(opts: BackupOpts) -> BackupResult:
 
         # Build S3 key: <prefix>/<db>-<timestamp><ext>.gz (ext already .sql.gz/.archive.gz etc)
         # If artifact extension already ends with .gz, use as-is; otherwise gzip will add it.
-        # Plan §Task 7: key <prefix>/<db>-<timestamp><ext>
-        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         ext = artifact.extension or ".dump"
-        # extension from adapters is .sql.gz / .archive.gz / .sqlite.gz — use directly
-        key_suffix = f"{database}-{ts}{ext}"
-        prefix = (opts.s3_prefix or "").strip("/")
-        s3_key = f"{prefix}/{key_suffix}" if prefix else key_suffix
+        # Use deterministic key builder
+        s3_key = _build_key(opts, artifact)
 
-        # Streaming: artifact.open_stream() -> compress -> S3 upload
+        # Streaming: artifact.open_stream() -> compress -> storage upload
         src = artifact.open_stream()
         compressed = io.BytesIO()
+        src_closed = False
         try:
             compress_stream(src, compressed, level=opts.gzip_level)
         finally:
             try:
                 src.close()
+                src_closed = True
             except Exception:
                 pass
         compressed.seek(0)
-        # wrap for S3 upload_fileobj
-        # Create minimal artifact wrapper with stream
+        raw_bytes = compressed.getvalue()
+        # wrap for storage upload — use compressed
         from dbbackup.models import BackupArtifact
 
         comp_artifact = BackupArtifact(
@@ -54,15 +86,15 @@ def run_backup(opts: BackupOpts) -> BackupResult:
             format=artifact.format,
             extension=ext,
             stream_or_path=compressed,
-            size_hint=len(compressed.getvalue()),
+            size_hint=len(raw_bytes),
         )
-        backend = S3Backend(
-            bucket=opts.s3_bucket,
-            region=opts.s3_region,
-            endpoint_url=opts.s3_endpoint_url,
-        )
+        backend = get_storage_backend(opts)
         backend.upload(comp_artifact, s3_key)
-        # cleanup temp artifact (sqlite temp-file)
+        try:
+            if not compressed.closed:
+                compressed.close()
+        except Exception:
+            pass
         try:
             artifact.close()
         except Exception:
@@ -72,7 +104,7 @@ def run_backup(opts: BackupOpts) -> BackupResult:
         return BackupResult(
             status="success",
             s3_key=s3_key,
-            bytes_written=len(compressed.getvalue()),
+            bytes_written=len(raw_bytes),
             start_time=start,
             end_time=end,
             duration_ms=duration,

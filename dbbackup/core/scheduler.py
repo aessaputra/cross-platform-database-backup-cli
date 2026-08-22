@@ -71,6 +71,11 @@ def _job_to_opts(job: dict[str, Any]) -> BackupOpts:
         password=str(job.get("password", "")),
         database=str(job.get("database", "")),
     )
+    # storage selection: per-job storage/local_path override global [storage]
+    storage_type = str(job.get("storage", "") or job.get("storage_type", "") or "s3").lower()
+    if storage_type not in ("s3", "local"):
+        storage_type = "s3"
+    # If still default s3 but parent config has storage fallback (handled by caller via merged dict), keep s3
     return BackupOpts(
         connection=conn,
         s3_bucket=str(job.get("s3_bucket", "")),
@@ -78,6 +83,9 @@ def _job_to_opts(job: dict[str, Any]) -> BackupOpts:
         s3_endpoint_url=job.get("s3_endpoint_url"),
         s3_region=job.get("s3_region"),
         gzip_level=int(job.get("gzip_level", 6) or 6),
+        storage_type=storage_type,
+        local_path=str(job.get("local_path", "")) if job.get("local_path") else None,
+        force=bool(job.get("force", False)),
     )
 
 
@@ -315,6 +323,19 @@ def start_scheduler(config: dict[str, Any]) -> SchedulerDaemon:
     for job in jobs:
         job_id = str(job.get("id") or job.get("database") or "job")
         trigger = _build_trigger(job)
+        # inherit global storage if job doesn't specify storage
+        if not job.get("storage") and not job.get("storage_type"):
+            g = config.get("storage") if isinstance(config.get("storage"), dict) else {}
+            gt = str(g.get("type", "")) if isinstance(g, dict) else ""
+            if gt.lower() in ("s3", "local"):
+                job = {**job, "storage": gt.lower()}
+            # also inherit local_path if local
+            if (job.get("storage") or gt.lower()) == "local" and not job.get("local_path"):
+                lp = None
+                if isinstance(g, dict) and isinstance(g.get("local"), dict):
+                    lp = g["local"].get("path")
+                if lp:
+                    job = {**job, "local_path": lp}
         opts = _job_to_opts(job)
         runner = _make_job_runner(job_id, lambda o=opts: o)
         scheduler.add_job(

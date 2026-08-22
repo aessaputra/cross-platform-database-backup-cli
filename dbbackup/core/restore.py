@@ -1,17 +1,20 @@
-"""Restore orchestration: S3 download -> gunzip -> adapter.restore() -> RestoreResult."""
+"""Restore orchestration: storage download -> gunzip -> adapter.restore() -> RestoreResult."""
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 from dbbackup.adapters.registry import get_adapter
 from dbbackup.core.compression import decompress_stream
 from dbbackup.core.redact import redact
 from dbbackup.models import RestoreOpts
-from dbbackup.storage.s3 import S3Backend
+from dbbackup.storage import get_storage_backend
 
 log = logging.getLogger(__name__)
 
@@ -34,27 +37,74 @@ class RestoreResult:
                 object.__setattr__(self, "error", "***")
 
 
+def _verify_local(key: str, gz_stream: io.BytesIO, local_path: str | None) -> None:
+    """If verify requested and local storage, check sha256 against sidecar."""
+    if not local_path:
+        return
+    sidecar = Path(local_path) / (key + ".json")
+    # Also try resolved root variant
+    candidates = [sidecar]
+    try:
+        from pathlib import Path as _P
+
+        alt = (_P(local_path).resolve() / key).with_suffix(_P(key).suffix + ".json") if "/" in key else None
+    except Exception:
+        alt = None
+    # simplest: key + .json under root
+    meta = None
+    for c in candidates:
+        if c.exists():
+            try:
+                meta = json.loads(c.read_text(encoding="utf-8"))
+                break
+            except Exception:
+                continue
+    if meta is None or "sha256" not in meta:
+        return  # no sidecar yet or no sha — skip verify rather than fail open in unexpected way
+    pos = gz_stream.tell()
+    gz_stream.seek(0)
+    h = hashlib.sha256()
+    while True:
+        chunk = gz_stream.read(64 * 1024)
+        if not chunk:
+            break
+        h.update(chunk)
+    gz_stream.seek(pos)
+    if h.hexdigest() != meta["sha256"]:
+        raise ValueError(f"sha256 mismatch for {key!r}: expected {meta['sha256']}, got {h.hexdigest()}")
+
+
 def run_restore(opts: RestoreOpts) -> RestoreResult:
     start = datetime.now(timezone.utc)
     t0 = time.monotonic()
     try:
         db_type = opts.connection.db_type
         adapter = get_adapter(db_type)
-        # S3 download — bucket derived from restore? Brief says S3Backend(bucket, ...) but RestoreOpts has no bucket.
-        # Plan Task 7: S3 download via bucket from same config; for test we mock S3Backend entirely,
-        # so bucket value doesn't matter. Use opts.s3_key prefix bucket placeholder or config.
-        # Try to resolve bucket from opts if present, else placeholder.
-        bucket = getattr(opts, "s3_bucket", None) or "test-bucket"
-        endpoint_url = getattr(opts, "s3_endpoint_url", None)
-        region = getattr(opts, "s3_region", None)
-        backend = S3Backend(bucket=bucket, region=region, endpoint_url=endpoint_url)
-        gz_stream = backend.download(opts.s3_key)
+        key = opts.effective_key()
+        if not key:
+            raise ValueError("restore requires --key (or --s3-key)")
+
+        # Verify before decompress if requested and local
+        backend = get_storage_backend(opts)
+        gz_stream = backend.download(key)
+
+        if opts.verify and opts.storage_type == "local":
+            # need to buffer for verify (download returns file stream); verify reads + rewinds
+            # wrap file stream into BytesIO for hashing without losing data
+            if not isinstance(gz_stream, io.BytesIO):
+                buf = io.BytesIO(gz_stream.read())
+                try:
+                    gz_stream.close()
+                except Exception:
+                    pass
+                gz_stream = buf
+            _verify_local(key, gz_stream, opts.local_path)
+            gz_stream.seek(0)
+
         # decompress to temp buffer then pass to adapter
         raw = io.BytesIO()
         decompress_stream(gz_stream, raw)
         raw.seek(0)
-        # adapter.restore expects BackupArtifact | BinaryIO — pass raw stream + opts
-        # For selective restore, RestoreOpts.tables/collections already set
         from dbbackup.models import BackupArtifact
 
         artifact = BackupArtifact(

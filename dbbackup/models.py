@@ -34,6 +34,10 @@ class BackupOpts:
     s3_region: str | None = None
     gzip_level: int = 6
     config: str | None = None
+    # V1.x: storage selection — single destination per invocation
+    storage_type: str = "s3"  # "s3" | "local"
+    local_path: str | None = None
+    force: bool = False
 
 
 @dataclass
@@ -42,9 +46,21 @@ class RestoreOpts:
 
     connection: ConnectionOpts = field(default_factory=ConnectionOpts)
     s3_key: str = ""
+    # Alias: key is preferred, s3_key retained for backward compat
+    key: str | None = None
     target_database: str | None = None
     tables: list[str] = field(default_factory=list)
     collections: list[str] = field(default_factory=list)
+    # V1.x storage selection for restore source
+    storage_type: str = "s3"  # "s3" | "local"
+    local_path: str | None = None
+    verify: bool = False
+
+    def effective_key(self) -> str:
+        """Return the effective key — --key preferred, --s3-key backward compat."""
+        if self.key:
+            return self.key
+        return self.s3_key
 
 
 @dataclass

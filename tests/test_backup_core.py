@@ -36,7 +36,7 @@ def test_backup_aborts_on_storage_failure():
         m = MagicMock()
         m.backup.return_value = art
         ga.return_value = m
-        with patch("dbbackup.core.backup.S3Backend") as sb_cls:
+        with patch("dbbackup.core.backup.get_storage_backend") as sb_cls:
             sb = MagicMock()
             sb.upload.side_effect = Exception("s3 fail")
             sb_cls.return_value = sb
@@ -54,7 +54,7 @@ def test_backup_success_gzip_and_key():
         m = MagicMock()
         m.backup.return_value = art
         ga.return_value = m
-        with patch("dbbackup.core.backup.S3Backend") as sb_cls:
+        with patch("dbbackup.core.backup.get_storage_backend") as sb_cls:
             sb = MagicMock()
             sb_cls.return_value = sb
             result = run_backup(_opts())

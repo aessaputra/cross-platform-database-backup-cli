@@ -95,14 +95,40 @@ def backup(
     password_env: Optional[str] = typer.Option(None, "--password-env", help="Env var holding password"),
     password_stdin: bool = typer.Option(False, "--password-stdin", help="Read password from stdin"),
     ask_password: bool = typer.Option(False, "--ask-password", help="Prompt for password"),
-    s3_bucket: str = typer.Option("", "--s3-bucket", help="S3 bucket"),
+    s3_bucket: str = typer.Option("", "--s3-bucket", help="S3 bucket (for --storage s3)"),
     s3_prefix: str = typer.Option("", "--s3-prefix", help="S3 key prefix"),
     s3_endpoint_url: Optional[str] = typer.Option(None, "--s3-endpoint-url", help="S3-compatible endpoint URL (MinIO)"),
     s3_region: Optional[str] = typer.Option(None, "--s3-region", help="S3 region"),
     gzip_level: int = typer.Option(6, "--gzip-level", help="gzip compression level 1-9"),
     config: Optional[str] = typer.Option(None, "--config", help="Path to TOML config file"),
+    storage: Optional[str] = typer.Option(None, "--storage", help="Storage type: s3 | local (default: s3 or TOML [storage].type)"),
+    local_path: Optional[str] = typer.Option(None, "--local-path", help="Local storage root path (for --storage local)"),
+    force: bool = typer.Option(False, "--force", help="Allow overwriting existing backup at destination key"),
 ) -> None:
-    """Run a full backup to S3 (v1: full only)."""
+    """Run a full backup to S3 or local filesystem (v1: full only)."""
+    # resolve storage from TOML/env if CLI not given
+    cli_storage = storage
+    cli_local_path = local_path
+    if not cli_storage:
+        try:
+            from dbbackup.config import load_config as _load_config
+
+            cfg = _load_config({"config": config} if config else {})
+            if cfg.storage_type:
+                cli_storage = cfg.storage_type
+            if cfg.local_path and not cli_local_path:
+                cli_local_path = cfg.local_path
+        except Exception:
+            pass
+    storage_type = (cli_storage or "s3").lower()
+    if storage_type not in ("s3", "local"):
+        err_console.print(f"[red]invalid --storage: {redact(storage_type)} (expected s3|local)[/red]")
+        raise typer.Exit(code=10)
+    if storage_type == "local" and not (cli_local_path or s3_bucket):
+        # s3_bucket check is legacy; for local, require local_path
+        if not cli_local_path:
+            err_console.print("[red]--storage local requires --local-path or [storage.local].path in TOML[/red]")
+            raise typer.Exit(code=10)
     pw = _resolve_password(password, password_env, password_stdin, ask_password)
     conn = ConnectionOpts(db_type=db, host=host, port=port, user=user, password=pw, database=database)
     opts = BackupOpts(
@@ -113,6 +139,9 @@ def backup(
         s3_region=s3_region,
         gzip_level=gzip_level,
         config=config,
+        storage_type=storage_type,
+        local_path=cli_local_path,
+        force=force,
     )
     from dbbackup.core.backup import run_backup
 
@@ -143,7 +172,8 @@ def backup(
 @app.command("restore")
 def restore(
     db: str = typer.Option(..., "--db", help="Database type: mysql | postgres | mongo | sqlite"),
-    s3_key: str = typer.Option(..., "--s3-key", help="S3 key of the backup to restore"),
+    s3_key: Optional[str] = typer.Option(None, "--s3-key", help="S3 key of the backup to restore (alias: --key)"),
+    key: Optional[str] = typer.Option(None, "--key", help="Backup key to restore (preferred; --s3-key is alias)"),
     target_db: Optional[str] = typer.Option(None, "--target-db", help="Target database name"),
     table: list[str] = typer.Option(None, "--table", help="Table to restore (repeatable; mysql/postgres)"),
     collection: list[str] = typer.Option(None, "--collection", help="Collection to restore (repeatable; mongo)"),
@@ -159,16 +189,42 @@ def restore(
     s3_bucket: str = typer.Option("", "--s3-bucket", help="S3 bucket holding backup"),
     s3_endpoint_url: Optional[str] = typer.Option(None, "--s3-endpoint-url", help="S3 endpoint URL"),
     s3_region: Optional[str] = typer.Option(None, "--s3-region", help="S3 region"),
+    storage: Optional[str] = typer.Option(None, "--storage", help="Storage type: s3 | local"),
+    local_path: Optional[str] = typer.Option(None, "--local-path", help="Local storage root path"),
+    verify: bool = typer.Option(False, "--verify", help="Verify SHA-256 sidecar before restore (local only)"),
 ) -> None:
-    """Restore a full backup from S3. Selective --table/--collection per adapter."""
+    """Restore a full backup from S3 or local filesystem. Selective --table/--collection per adapter."""
+    effective = key or s3_key
+    if not effective:
+        err_console.print("[red]restore requires --key (or --s3-key)[/red]")
+        raise typer.Exit(code=10)
     pw = _resolve_password(password, password_env, password_stdin, ask_password)
     conn = ConnectionOpts(db_type=db, host=host, port=port, user=user, password=pw, database=database)
+    # resolve storage default from TOML if not given
+    cli_storage = storage
+    cli_local_path = local_path
+    if not cli_storage:
+        try:
+            from dbbackup.config import load_config as _load_config
+
+            cfg = _load_config({"config": config} if config else {})
+            if cfg.storage_type:
+                cli_storage = cfg.storage_type
+            if cfg.local_path and not cli_local_path:
+                cli_local_path = cfg.local_path
+        except Exception:
+            pass
+    storage_type = (cli_storage or "s3").lower()
     opts = RestoreOpts(
         connection=conn,
-        s3_key=s3_key,
+        s3_key=effective or "",
+        key=key,
         target_database=target_db,
         tables=list(table or []),
         collections=list(collection or []),
+        storage_type=storage_type,
+        local_path=cli_local_path,
+        verify=verify,
     )
     # attach s3 bucket for restore if provided
     if s3_bucket:

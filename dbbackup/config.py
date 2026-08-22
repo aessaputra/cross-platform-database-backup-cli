@@ -46,6 +46,9 @@ class Config:
     host: str = ""
     port: int = 0
     password: str = ""
+    # V1.x storage
+    storage_type: str = "s3"
+    local_path: str | None = None
 
 
 def load_config(cli_args: dict | None = None, *, project_toml: str | Path | None = None) -> Config:
@@ -82,10 +85,26 @@ def load_config(cli_args: dict | None = None, *, project_toml: str | Path | None
                 log.warning("plaintext password in %s TOML — set allow_plaintext_password=true to suppress; prefer env/secret mechanisms", src_name)
 
     merged.update(proj_data.get("connection", {}))
-    merged.update({k: v for k, v in proj_data.items() if k not in ("connection", "s3", "allow_plaintext_password")})
+    merged.update({k: v for k, v in proj_data.items() if k not in ("connection", "s3", "storage", "allow_plaintext_password")})
+    # storage block: [storage] type, [storage.local] path
+    _storage = proj_data.get("storage", {}) if isinstance(proj_data.get("storage"), dict) else {}
+    if isinstance(_storage, dict):
+        if "type" in _storage:
+            merged["storage_type"] = str(_storage["type"]).lower()
+        # also honour per-user storage block if not overwritten by project
+        if "local" in _storage and isinstance(_storage["local"], dict) and "path" in _storage["local"]:
+            merged["local_path"] = str(_storage["local"]["path"])
+    # user-level storage fallback if not set by project
+    _u_storage = user_data.get("storage", {}) if isinstance(user_data.get("storage"), dict) else {}
+    if isinstance(_u_storage, dict) and "storage_type" not in merged:
+        if "type" in _u_storage:
+            merged["storage_type"] = str(_u_storage["type"]).lower()
+    if isinstance(_u_storage, dict) and "local_path" not in merged:
+        if "local" in _u_storage and isinstance(_u_storage["local"], dict) and "path" in _u_storage["local"]:
+            merged["local_path"] = str(_u_storage["local"]["path"])
 
     # 3. env DBBACKUP_*
-    for env_key, cfg_key in [("DBBACKUP_DATABASE", "database"), ("DBBACKUP_HOST", "host"), ("DBBACKUP_PORT", "port")]:
+    for env_key, cfg_key in [("DBBACKUP_DATABASE", "database"), ("DBBACKUP_HOST", "host"), ("DBBACKUP_PORT", "port"), ("DBBACKUP_STORAGE_TYPE", "storage_type"), ("DBBACKUP_LOCAL_PATH", "local_path")]:
         if env_key in os.environ:
             merged[cfg_key] = os.environ[env_key]
             if cfg_key == "port":
@@ -102,10 +121,16 @@ def load_config(cli_args: dict | None = None, *, project_toml: str | Path | None
             merged[k] = v
 
     # Build Config
+    # normalize storage_type
+    st = str(merged.get("storage_type", "s3")).lower()
+    if st not in ("s3", "local"):
+        st = "s3"
     return Config(
         database=str(merged.get("database", "")),
         config=str(cfg_path_arg) if cfg_path_arg else None,
         host=str(merged.get("host", "")),
         port=int(merged.get("port", 0) or 0),
         password=str(merged.get("password", "")),
+        storage_type=st,
+        local_path=str(merged.get("local_path")) if merged.get("local_path") else None,
     )
