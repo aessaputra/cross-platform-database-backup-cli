@@ -65,7 +65,7 @@ def test_exit_codes_binary_missing(monkeypatch):
     # When mysqldump missing, backup should exit 11 after wiring; mock shutil.which failure via adapter
     from unittest.mock import MagicMock, patch
 
-    with patch("dbbackup.cli.get_adapter") as ga:
+    with patch("dbbackup.adapters.registry.get_adapter") as ga:
         from dbbackup.adapters._helpers import BinaryNotFoundError
 
         m = MagicMock()
